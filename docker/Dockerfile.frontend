@@ -2,12 +2,22 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-    gcc \
-    libpq-dev \
-    libgomp1 \
-    poppler-utils \
-    && rm -rf /var/lib/apt/lists/*
+# Install system dependencies properly
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        gcc \
+        libpq-dev \
+        libgomp1 \
+        poppler-utils \
+        build-essential \
+        curl \
+        ca-certificates \
+        gnupg \
+    && apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Upgrade pip (important for slim images)
+RUN pip install --upgrade pip
 
 COPY app/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
@@ -16,8 +26,4 @@ COPY app/ ./app/
 
 EXPOSE 8501
 
-# Run Member 3's Streamlit UI
-CMD ["streamlit", "run", "app/main.py", \
-     "--server.port=8501", \
-     "--server.address=0.0.0.0", \
-     "--server.fileWatcherType=none"]
+CMD ["streamlit", "run", "app/main.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.fileWatcherType=none"]
