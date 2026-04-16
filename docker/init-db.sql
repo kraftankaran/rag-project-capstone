@@ -1,28 +1,40 @@
 -- ─────────────────────────────────────────────────────────────────────────────
--- Intelligent Document Explorer — Database Initialisation (SYNCED WITH APP)
+-- Intelligent Document Explorer — Full DB Init (Production Ready)
 -- ─────────────────────────────────────────────────────────────────────────────
 
+-- ========================
 -- Extensions
+-- ========================
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS vector;
 
--- ── documents ────────────────────────────────────────────────────────────────
+-- ========================
+-- DOCUMENTS TABLE
+-- ========================
 CREATE TABLE IF NOT EXISTS documents (
     document_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
     file_name         TEXT NOT NULL,
+    file_type         TEXT DEFAULT 'unsupported',
+
     blob_path         TEXT NOT NULL,
     storage_container TEXT NOT NULL,
+
     uploaded_at       TIMESTAMPTZ DEFAULT NOW(),
-    file_type         TEXT DEFAULT 'unsupported',
+
     status            TEXT NOT NULL CHECK (
                           status IN ('pending', 'processing', 'completed', 'failed')
                       ) DEFAULT 'pending',
+
     page_count        INT DEFAULT 0,
+
     created_at        TIMESTAMPTZ DEFAULT NOW(),
     updated_at        TIMESTAMPTZ DEFAULT NOW()
 );
 
--- ── pages ────────────────────────────────────────────────────────────────────
+-- ========================
+-- PAGES TABLE
+-- ========================
 CREATE TABLE IF NOT EXISTS pages (
     id              SERIAL PRIMARY KEY,
     document_id     UUID NOT NULL,
@@ -36,7 +48,9 @@ CREATE TABLE IF NOT EXISTS pages (
         ON DELETE CASCADE
 );
 
--- ── ocr_results ──────────────────────────────────────────────────────────────
+-- ========================
+-- OCR RESULTS TABLE
+-- ========================
 CREATE TABLE IF NOT EXISTS ocr_results (
     id          SERIAL PRIMARY KEY,
     document_id UUID NOT NULL,
@@ -53,7 +67,9 @@ CREATE TABLE IF NOT EXISTS ocr_results (
         ON DELETE CASCADE
 );
 
--- ── embeddings (MATCHES YOUR PYTHON) ─────────────────────────────────────────
+-- ========================
+-- EMBEDDINGS TABLE
+-- ========================
 CREATE TABLE IF NOT EXISTS embeddings (
     id TEXT PRIMARY KEY,
 
@@ -66,7 +82,11 @@ CREATE TABLE IF NOT EXISTS embeddings (
 
     content TEXT,
 
-    embedding VECTOR(384),  -- IMPORTANT: matches all-MiniLM-L6-v2
+    -- BM25 column
+    content_tsv tsvector,
+
+    -- Vector embedding (MiniLM = 384)
+    embedding VECTOR(384),
 
     created_at TIMESTAMPTZ DEFAULT NOW(),
 
@@ -76,21 +96,61 @@ CREATE TABLE IF NOT EXISTS embeddings (
         ON DELETE CASCADE
 );
 
--- ── Indexes ──────────────────────────────────────────────────────────────────
+-- ========================
+-- BM25 TRIGGER FUNCTION
+-- ========================
+CREATE OR REPLACE FUNCTION update_embeddings_tsv()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.content_tsv := to_tsvector('english', COALESCE(NEW.content, ''));
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- ========================
+-- BM25 TRIGGER
+-- ========================
+DROP TRIGGER IF EXISTS trg_update_embeddings_tsv ON embeddings;
+
+CREATE TRIGGER trg_update_embeddings_tsv
+BEFORE INSERT OR UPDATE ON embeddings
+FOR EACH ROW
+EXECUTE FUNCTION update_embeddings_tsv();
+
+-- ========================
+-- INDEXES
+-- ========================
+
+-- Documents
 CREATE INDEX IF NOT EXISTS idx_documents_status
     ON documents (status);
 
+-- Pages
 CREATE INDEX IF NOT EXISTS idx_pages_document_id
     ON pages (document_id);
 
+-- OCR
 CREATE INDEX IF NOT EXISTS idx_ocr_document_id
     ON ocr_results (document_id);
 
+-- Embeddings metadata
 CREATE INDEX IF NOT EXISTS idx_embeddings_document_id
     ON embeddings (document_id);
 
--- Vector index
-CREATE INDEX IF NOT EXISTS idx_embeddings_vector
+-- ========================
+-- BM25 INDEX (GIN)
+-- ========================
+CREATE INDEX IF NOT EXISTS idx_embeddings_tsv
+ON embeddings USING GIN(content_tsv);
+
+-- ========================
+-- VECTOR INDEX (HNSW)
+-- ========================
+CREATE INDEX IF NOT EXISTS idx_embeddings_hnsw
 ON embeddings
-USING ivfflat (embedding vector_cosine_ops)
-WITH (lists = 100);
+USING hnsw (embedding vector_cosine_ops);
+
+-- ========================
+-- ANALYZE (IMPORTANT)
+-- ========================
+ANALYZE;
