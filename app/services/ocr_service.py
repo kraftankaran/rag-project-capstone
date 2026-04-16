@@ -1,4 +1,4 @@
-import os
+import os, re
 from pypdf import PdfReader, PdfWriter
 from langchain_core.documents import Document
 from azure.identity import DefaultAzureCredential
@@ -45,7 +45,9 @@ def split_pdf(file_path: str):
 
 
 def clean_text(text: str):
+    text = text.lower()
     text = text.replace("<figure>", "").replace("</figure>", "")
+    text = re.sub(r'[^a-z0-9\s]', ' ', text)
     return " ".join(text.split())
 
 
