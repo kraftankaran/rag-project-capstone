@@ -147,7 +147,7 @@ class ContextBuilder:
             header = (
                 f"[Source {i}] {chunk.file_name} — page {chunk.page_number}"
             )
-            body = chunk.content.strip()
+            body = getattr(chunk, "llm_content", chunk.content).strip()
             entry = f"{header}\n{body}\n"
 
             if len(entry) > budget:
@@ -229,7 +229,7 @@ class HuggingFaceLLMClient(LLMClient):
                 model=model_name,
                 max_new_tokens=512,
                 do_sample=True,
-                temperature=0.1,
+                temperature=0,
             )
             logger.info(f"HuggingFaceLLMClient loaded model: {model_name}")
         except Exception as exc:

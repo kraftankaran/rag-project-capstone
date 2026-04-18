@@ -1,4 +1,6 @@
 import os, re
+import nltk
+from nltk.tokenize import sent_tokenize
 from pypdf import PdfReader, PdfWriter
 from langchain_core.documents import Document
 from azure.identity import DefaultAzureCredential
@@ -48,10 +50,16 @@ def clean_text(text: str):
     text = text.lower()
     text = text.replace("<figure>", "").replace("</figure>", "")
 
-    text = re.sub(r'[^a-z0-9\s\.\,\%\$\-\:\/]', ' ', text)
+    text = re.sub(r'[^a-z0-9\s\.\,\%\!\?\$\-\:\/]', ' ', text)
 
     return " ".join(text.split())
 
+def safe_sent_tokenize(text):
+    try:
+        return sent_tokenize(text)
+    except LookupError:
+        # fallback (never crash)
+        return re.split(r'(?<=[\.])\s+', text)
 
 def run_ocr(file_path: str, document_id: str, doc_id: int, file_type: str):
     page_files = split_pdf(file_path)
@@ -117,7 +125,7 @@ def run_ocr(file_path: str, document_id: str, doc_id: int, file_type: str):
 
                         for line in lines:
                             if line and getattr(line, "content", None):
-                                full_text += line.content + " "
+                                full_text += line.content.strip() + ". "
 
             except Exception as e:
                 logger.error(f"Text extraction failed for page {page_num}: {e}")
@@ -169,21 +177,50 @@ def run_ocr(file_path: str, document_id: str, doc_id: int, file_type: str):
                 except Exception as e:
                     logger.error(f"Error processing page: {e}")
 
-    def _chunk_text(text, size=1000, overlap=150):
+    def _chunk_text(text, size=650):
+        sentences = safe_sent_tokenize(text)
+
         chunks = []
-        paragraphs = text.split("\n")
+        current = []
+        current_len = 0
 
-        current = ""
+        # 🔥 fixed 15% overlap based on size
+        overlap_len_target = int(size * 0.2)
 
-        for para in paragraphs:
-            if len(current) + len(para) < size:
-                current += " " + para
+        for sentence in sentences:
+            if not sentence.strip():
+                continue
+
+            sentence_len = len(sentence)
+
+            if current_len + sentence_len <= size:
+                current.append(sentence)
+                current_len += sentence_len
             else:
-                chunks.append(current.strip())
-                current = para
+                # finalize current chunk
+                chunk = " ".join(current).strip()
+                if chunk:
+                    chunks.append(chunk)
+                logger.info(f"Chunk {i} (len={len(chunk)}): {chunk[:100]}")
+                # 🔁 build overlap based on character length (~15%)
+                overlap = []
+                temp_len = 0
 
+                for s in reversed(current):
+                    if temp_len + len(s) > overlap_len_target:
+                        break
+                    overlap.insert(0, s)
+                    temp_len += len(s)
+
+                # start new chunk with overlap + current sentence
+                current = overlap + [sentence]
+                current_len = sum(len(s) for s in current)
+
+        # last chunk
         if current:
-            chunks.append(current.strip())
+            chunk = " ".join(current).strip()
+            if chunk:
+                chunks.append(chunk)
 
         return chunks
 

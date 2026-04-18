@@ -21,7 +21,7 @@ Integration points
   - Called by app.api.search_chat_api        (Member 2)
 """
 
-import logging
+import logging,re
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -71,7 +71,7 @@ def _bm25_search(query: str, top_k: int = DEFAULT_TOP_K * 2) -> list[RetrievedCh
             page_number,
             chunk_id,
             content,
-            ts_rank_cd(content_tsv, plainto_tsquery('english', %s)) AS bm25_score
+            ts_rank_cd(content_tsv, websearch_to_tsquery('english', %s)) AS bm25_score
         FROM embeddings
         ORDER BY bm25_score DESC
         LIMIT %s;
@@ -197,8 +197,12 @@ def _reciprocal_rank_fusion(
     return fused
 
 def normalize_query(q: str):
-    return q.lower().replace("-", " ")
+    q=q.lower()
+    # stopwords = {"what", "is", "the", "between", "and", "according", "to"}
+    # tokens = [t for t in q.split() if t not in stopwords]
 
+    # q=" ".join(tokens)
+    return re.sub(r'[^a-z0-9\s\.\,\%\!\?\$\:\(\)]', ' ', q)
 
 def _get_adjacent_chunks(chunk):
     conn = Database.get_connection()
@@ -281,19 +285,45 @@ def hybrid_search(
     )
 
     reranked = rerank(query, fused[:top_k * 3])
-    print("Re-ranked"*20,reranked)
 
     expanded = []
 
-    for chunk in reranked[:top_k]:
-        neighbors = _get_adjacent_chunks(chunk)
-        merged_text = " ".join([c.content for c in neighbors])
+    top_chunks = reranked[:top_k]
+    support_chunks = reranked[top_k: top_k * 2]
 
-        chunk.content = merged_text
+    for chunk in top_chunks:
+        neighbors = _get_adjacent_chunks(chunk)
+
+        prev_chunks = [c for c in neighbors if c.chunk_id < chunk.chunk_id]
+        next_chunks = [c for c in neighbors if c.chunk_id > chunk.chunk_id]
+
+        prev_text = " ".join(c.content for c in prev_chunks)
+        next_text = " ".join(c.content for c in next_chunks)
+
+        support_text = " ".join(
+            c.content for c in support_chunks
+            if c.id != chunk.id
+        )
+    
+
+        sections = []
+
+        sections.append(f"Main content:\n{chunk.content}")
+
+        if prev_text.strip():
+            sections.append(f"Context before:\n{prev_text}")
+
+        if next_text.strip():
+            sections.append(f"Context after:\n{next_text}")
+
+        if support_text.strip():
+            sections.append(f"Supporting context:\n{support_text}")
+
+        chunk.llm_content = "\n\n".join(sections)
+
         expanded.append(chunk)
 
     final = expanded
-    print("Re-ranked"*20,final)
 
     logger.info(
         f"hybrid_search: query='{query[:60]}' | "
