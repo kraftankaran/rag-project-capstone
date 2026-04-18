@@ -15,6 +15,7 @@ uvicorn
 python-multipart
 psycopg2-binary
 sentence-transformers
+nltk
 
 # ── Member 4 (Karan) — additional packages needed for Docker to work ──────────
 pgvector>=0.2.5
