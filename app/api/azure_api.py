@@ -10,7 +10,8 @@ from app.services.ingestion_azure_service import process_single_pdf
 from pydantic import BaseModel
 from typing import Optional, List
 from app.services.retrieval_service import hybrid_search
-from app.services.chat_service import chat, clear_history
+from app.services.chat_service import clear_history
+from app.services.rag_service import rag_chat as chat
 
 from app.services.embedding_service import generate_embedding
 

@@ -1,7 +1,7 @@
 from sentence_transformers import CrossEncoder
 
 # load once (important)
-reranker_model = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+reranker_model = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-12-v2")
 
 
 def rerank(query: str, chunks: list):
