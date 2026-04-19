@@ -70,7 +70,7 @@ def run_ocr(file_path: str, document_id: str, doc_id: int, file_type: str):
         credential=DefaultAzureCredential()
     )
 
-    BATCH_SIZE = 3
+    BATCH_SIZE = 5
 
     def process_page(page_tuple):
         try:
@@ -167,7 +167,7 @@ def run_ocr(file_path: str, document_id: str, doc_id: int, file_type: str):
 
         logger.info(f"Processing batch: pages {[p[1] for p in batch]}")
 
-        with ThreadPoolExecutor(max_workers=3) as executor:
+        with ThreadPoolExecutor(max_workers=5) as executor:
             futures = [executor.submit(process_page, p) for p in batch]
 
             for future in as_completed(futures):
@@ -177,14 +177,13 @@ def run_ocr(file_path: str, document_id: str, doc_id: int, file_type: str):
                 except Exception as e:
                     logger.error(f"Error processing page: {e}")
 
-    def _chunk_text(text, size=650):
+    def _chunk_text(text, size=1000):
         sentences = safe_sent_tokenize(text)
 
         chunks = []
         current = []
         current_len = 0
 
-        # 🔥 fixed 15% overlap based on size
         overlap_len_target = int(size * 0.2)
 
         for sentence in sentences:

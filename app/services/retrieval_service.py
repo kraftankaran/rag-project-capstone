@@ -21,7 +21,7 @@ Integration points
   - Called by app.api.search_chat_api        (Member 2)
 """
 
-import logging,re
+import logging, re
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -35,9 +35,9 @@ logger = logging.getLogger(__name__)
 
 # ── Tuning knobs (can be overridden per call) ─────────────────────────────────
 DEFAULT_TOP_K: int = 5
-DEFAULT_BM25_WEIGHT: float = 0.2   # α  — weight for BM25 rank contribution
-DEFAULT_HNSW_WEIGHT: float = 0.8   # β  — weight for HNSW rank contribution
-RRF_K: int = 60                     # RRF constant (60 is the standard default)
+DEFAULT_BM25_WEIGHT: float = 0.2
+DEFAULT_HNSW_WEIGHT: float = 0.8
+RRF_K: int = 60
 
 
 # ── Data transfer object ──────────────────────────────────────────────────────
@@ -51,9 +51,9 @@ class RetrievedChunk:
     page_number: int
     chunk_id: int
     content: str
-    bm25_rank: Optional[int] = None    # 1-based rank from BM25 leg
-    hnsw_rank: Optional[int] = None    # 1-based rank from HNSW leg
-    rrf_score: float = 0.0             # final fusion score (higher = better)
+    bm25_rank: Optional[int] = None
+    hnsw_rank: Optional[int] = None
+    rrf_score: float = 0.0
     metadata: dict = field(default_factory=dict)
 
 
@@ -158,6 +158,7 @@ def _hnsw_search(query: str, top_k: int = DEFAULT_TOP_K * 2) -> list[RetrievedCh
 
     return results
 
+
 # ── Reciprocal Rank Fusion ────────────────────────────────────────────────────
 
 def _reciprocal_rank_fusion(
@@ -167,15 +168,6 @@ def _reciprocal_rank_fusion(
     hnsw_weight: float = DEFAULT_HNSW_WEIGHT,
     rrf_k: int = RRF_K,
 ) -> list[RetrievedChunk]:
-    """
-    Combine two ranked lists using weighted Reciprocal Rank Fusion.
-
-    RRF score for document d:
-        score(d) = α * Σ 1/(k + rank_bm25(d))  +  β * Σ 1/(k + rank_hnsw(d))
-
-    Documents not appearing in one list are simply scored 0 for that leg.
-    """
-    # Build lookup: chunk_id → RetrievedChunk (HNSW result preferred for content)
     merged: dict[str, RetrievedChunk] = {}
 
     for rank, chunk in enumerate(bm25_results, start=1):
@@ -196,13 +188,11 @@ def _reciprocal_rank_fusion(
     fused = sorted(merged.values(), key=lambda c: c.rrf_score, reverse=True)
     return fused
 
-def normalize_query(q: str):
-    q=q.lower()
-    # stopwords = {"what", "is", "the", "between", "and", "according", "to"}
-    # tokens = [t for t in q.split() if t not in stopwords]
 
-    # q=" ".join(tokens)
+def normalize_query(q: str):
+    q = q.lower()
     return re.sub(r'[^a-z0-9\s\.\,\%\!\?\$\:\(\)]', ' ', q)
+
 
 def _get_adjacent_chunks(chunk):
     conn = Database.get_connection()
@@ -236,6 +226,7 @@ def _get_adjacent_chunks(chunk):
     finally:
         Database.return_connection(conn)
 
+
 # ── Public hybrid search entry point ─────────────────────────────────────────
 
 def hybrid_search(
@@ -244,31 +235,14 @@ def hybrid_search(
     bm25_weight: float = DEFAULT_BM25_WEIGHT,
     hnsw_weight: float = DEFAULT_HNSW_WEIGHT,
 ) -> list[RetrievedChunk]:
-    """
-    Run BM25 + HNSW in parallel, fuse via RRF, return the top-*top_k* chunks.
-
-    Parameters
-    ----------
-    query       : User's natural-language question.
-    top_k       : Number of final chunks to return after fusion.
-    bm25_weight : α — contribution weight for the BM25 leg (default 0.4).
-    hnsw_weight : β — contribution weight for the HNSW leg (default 0.6).
-
-    Returns
-    -------
-    list[RetrievedChunk]
-        Sorted by descending RRF score; at most *top_k* entries.
-    """
     if not query or not query.strip():
         logger.warning("hybrid_search called with empty query")
         return []
 
-    # Fetch a wider pool from each leg so fusion has enough candidates
     pool = top_k * 3
 
     raw_query = query
     normalized_query = normalize_query(query)
-
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         bm25_future = executor.submit(_bm25_search, normalized_query, pool)
@@ -304,10 +278,8 @@ def hybrid_search(
             c.content for c in support_chunks
             if c.id != chunk.id
         )
-    
 
         sections = []
-
         sections.append(f"Main content:\n{chunk.content}")
 
         if prev_text.strip():
