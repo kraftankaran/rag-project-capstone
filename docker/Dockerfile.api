@@ -2,27 +2,24 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-    gcc \
-    libpq-dev \
-    libgomp1 \
-    curl \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc libpq-dev libgomp1 curl \
     && rm -rf /var/lib/apt/lists/*
 
-# ✅ Install PyTorch (CPU)
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 
 COPY app/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ✅ 🔥 ADD THIS (NLTK DATA)
 RUN python -m nltk.downloader punkt punkt_tab
 
-# Optional: preload embedding model
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-mpnet-base-v2')"
+# Pre-download both ML models at build time
+RUN python -c "\
+from sentence_transformers import SentenceTransformer, CrossEncoder; \
+SentenceTransformer('all-MiniLM-L6-v2'); \
+CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')"
 
 COPY app/ ./app/
 
 EXPOSE 8000
-
 CMD ["uvicorn", "app.api.azure_api:app", "--host", "0.0.0.0", "--port", "8000"]

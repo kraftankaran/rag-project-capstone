@@ -1,37 +1,5 @@
 services:
 
-  # ── FastAPI backend (Member 1's azure_api.py) ──────────────────────────────
-  api:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.api
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./app:/app/app:cached
-    env_file:
-      - .env
-    depends_on:
-      db:
-        condition: service_healthy
-    restart: on-failure
-
-  # ── Streamlit frontend (Member 3's UI) ────────────────────────────────────
-  # frontend:
-  #   build:
-  #     context: .
-  #     dockerfile: docker/Dockerfile.frontend
-  #   ports:
-  #     - "8502:8501"
-  #   volumes:
-  #     - ./app:/app/app:cached
-  #   env_file:
-  #     - .env
-  #   depends_on:
-  #     - api
-  #   restart: on-failure
-
-  # ── PostgreSQL + pgvector ─────────────────────────────────────────────────
   db:
     image: ankane/pgvector
     environment:
@@ -49,6 +17,35 @@ services:
       timeout: 5s
       retries: 10
     restart: always
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app:/app/app:cached
+    env_file:
+      - .env
+    environment:
+      # Override DATABASE_URL so the host is always the db service name,
+      # regardless of what is written in .env
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-doc_explorer}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: on-failure
+
+  frontend:
+    build:
+      context: "./app/rag frontend/frontend"
+      dockerfile: "../../../docker/Dockerfile.frontend"
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
+    restart: on-failure
 
 volumes:
   postgres_data:

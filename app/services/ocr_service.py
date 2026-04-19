@@ -15,7 +15,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
-storage = AzureStorageService()
+
 
 
 def split_pdf(file_path: str):
@@ -61,7 +61,43 @@ def safe_sent_tokenize(text):
         # fallback (never crash)
         return re.split(r'(?<=[\.])\s+', text)
 
+def _chunk_text(text, size=650):
+    sentences = safe_sent_tokenize(text)
+    chunks = []
+    current = []
+    current_len = 0
+    overlap_len_target = int(size * 0.2)
+
+    for sentence in sentences:
+        if not sentence.strip():
+            continue
+        sentence_len = len(sentence)
+        if current_len + sentence_len <= size:
+            current.append(sentence)
+            current_len += sentence_len
+        else:
+            chunk = " ".join(current).strip()
+            if chunk:
+                chunks.append(chunk)
+            overlap = []
+            temp_len = 0
+            for s in reversed(current):
+                if temp_len + len(s) > overlap_len_target:
+                    break
+                overlap.insert(0, s)
+                temp_len += len(s)
+            current = overlap + [sentence]
+            current_len = sum(len(s) for s in current)
+
+    if current:
+        chunk = " ".join(current).strip()
+        if chunk:
+            chunks.append(chunk)
+    return chunks
+
+
 def run_ocr(file_path: str, document_id: str, doc_id: int, file_type: str):
+    storage = AzureStorageService()
     page_files = split_pdf(file_path)
     all_docs = []
 
@@ -70,7 +106,7 @@ def run_ocr(file_path: str, document_id: str, doc_id: int, file_type: str):
         credential=DefaultAzureCredential()
     )
 
-    BATCH_SIZE = 5
+    BATCH_SIZE = 3
 
     def process_page(page_tuple):
         try:
@@ -167,7 +203,7 @@ def run_ocr(file_path: str, document_id: str, doc_id: int, file_type: str):
 
         logger.info(f"Processing batch: pages {[p[1] for p in batch]}")
 
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        with ThreadPoolExecutor(max_workers=3) as executor:
             futures = [executor.submit(process_page, p) for p in batch]
 
             for future in as_completed(futures):
@@ -176,52 +212,6 @@ def run_ocr(file_path: str, document_id: str, doc_id: int, file_type: str):
                     all_docs.extend(result_docs)
                 except Exception as e:
                     logger.error(f"Error processing page: {e}")
-
-    def _chunk_text(text, size=1000):
-        sentences = safe_sent_tokenize(text)
-
-        chunks = []
-        current = []
-        current_len = 0
-
-        overlap_len_target = int(size * 0.2)
-
-        for sentence in sentences:
-            if not sentence.strip():
-                continue
-
-            sentence_len = len(sentence)
-
-            if current_len + sentence_len <= size:
-                current.append(sentence)
-                current_len += sentence_len
-            else:
-                # finalize current chunk
-                chunk = " ".join(current).strip()
-                if chunk:
-                    chunks.append(chunk)
-                logger.info(f"Chunk {i} (len={len(chunk)}): {chunk[:100]}")
-                # 🔁 build overlap based on character length (~15%)
-                overlap = []
-                temp_len = 0
-
-                for s in reversed(current):
-                    if temp_len + len(s) > overlap_len_target:
-                        break
-                    overlap.insert(0, s)
-                    temp_len += len(s)
-
-                # start new chunk with overlap + current sentence
-                current = overlap + [sentence]
-                current_len = sum(len(s) for s in current)
-
-        # last chunk
-        if current:
-            chunk = " ".join(current).strip()
-            if chunk:
-                chunks.append(chunk)
-
-        return chunks
 
     logger.info("Starting embedding generation...")
 
