@@ -1,204 +1,245 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import StreamingResponse
-from app.db.db import Database
-from pypdf import PdfReader
 import os
+import logging
 
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from typing import Optional
+from pypdf import PdfReader
+
+from app.db.db import Database
+from app.core.config import settings
+from app.core.logging import get_logger
 from app.services.storage_service import AzureStorageService
 from app.services.ingestion_azure_service import process_single_pdf
-
-from pydantic import BaseModel
-from typing import Optional, List
 from app.services.retrieval_service import hybrid_search
-from app.services.chat_service import clear_history
-from app.services.rag_service import rag_chat as chat
+from app.services.chat_service import chat, clear_history
+from app.services.db_service import create_document, update_status, update_page_count
 
-from app.services.embedding_service import generate_embedding
+logger = get_logger(__name__)
 
-from app.services.db_service import (
-    create_document,
-    update_status,
-    update_page_count
+app = FastAPI(title="NeuralRAG")
+
+# CORS: allows the React frontend on port 5173 to call this API
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-from app.core.config import settings
 
-app = FastAPI()
-storage = AzureStorageService()
+
+
 class ChatRequest(BaseModel):
     message: str
     conversation_id: Optional[str] = "default_session"
+
 
 class SearchRequest(BaseModel):
     query: str
     top_k: Optional[int] = 5
 
 
-
 @app.on_event("startup")
 def startup():
+    
     Database.initialize()
 
 
 @app.on_event("shutdown")
 def shutdown():
+    
     Database.close_all()
 
 
-# ========================
-# 📤 UPLOAD + OCR
-# ========================
-import os
+@app.get("/health")
+def health():
+    storage = AzureStorageService()
+    return {"status": "ok"}
+
 
 @app.post("/upload")
 async def upload_pdf(file: UploadFile = File(...)):
+    storage = AzureStorageService()
     temp_path = f"/tmp/{file.filename}"
+    doc_id = None  # must be set before try so except can always reference it
 
     with open(temp_path, "wb") as f:
         f.write(await file.read())
 
     try:
-        file_ext = file.filename.split(".")[-1].lower()
-
-        if file_ext == "pdf":
+        ext = file.filename.rsplit(".", 1)[-1].lower()
+        if ext == "pdf":
             file_type = "pdf"
-        elif file_ext in ["png", "jpg", "jpeg"]:
+        elif ext in ("png", "jpg", "jpeg"):
             file_type = "image"
-        elif file_ext == "csv":
+        elif ext == "csv":
             file_type = "csv"
         else:
             raise HTTPException(
                 status_code=400,
-                detail=f"Unsupported file type: {file_ext}. Accepted: pdf, png, jpg, jpeg, csv"
+                detail=f"Unsupported file type: .{ext}. Accepted: pdf, png, jpg, jpeg, csv",
             )
 
         blob_name = storage.upload_file(temp_path, file_type=file_type)
 
-        doc_id, exists = create_document(
+        doc_id, already_exists = create_document(
             file_name=file.filename,
             blob_path=blob_name,
             container=settings.AZURE_STORAGE_CONTAINER,
-            file_type=file_type 
+            file_type=file_type,
         )
 
-        if exists:
-            return {
-                "message": "Document already processed",
-                "document_id": doc_id
-            }
+        if already_exists:
+            return {"message": "Document already processed", "document_id": str(doc_id)}
 
         update_status(doc_id, "processing")
+        docs = process_single_pdf(temp_path, file.filename, doc_id, file_type)
 
-        docs = process_single_pdf(temp_path, blob_name, doc_id, file_type)
-
-        reader = PdfReader(temp_path)
-        page_count = len(reader.pages)
+        page_count = 0
+        if file_type == "pdf":
+            page_count = len(PdfReader(temp_path).pages)
 
         update_page_count(doc_id, page_count)
         update_status(doc_id, "completed")
 
         return {
             "message": "uploaded + processed",
+            "document_id": str(doc_id),
             "file": blob_name,
-            "pages": len(docs)
+            "pages": page_count,
+            "chunks": len(docs),
         }
 
-    except Exception as e:
-        update_status(doc_id, "failed")
+    except HTTPException:
         raise
+
+    except Exception as exc:
+        logger.error(f"upload_pdf failed: {exc}", exc_info=True)
+        if doc_id is not None:
+            try:
+                update_status(doc_id, "failed")
+            except Exception:
+                pass
+        raise HTTPException(status_code=500, detail=str(exc))
 
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
-# ========================
-# 📥 LIST PDFs
-# ========================
+
 @app.get("/pdfs")
 def list_pdfs():
-    return storage.list_pdfs()
+    storage = AzureStorageService()
+    try:
+        return storage.list_pdfs()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
-# ========================
-# 📥 DOWNLOAD + OCR
-# ========================
-@app.post("/process/{file_name}")
+@app.post("/process/{file_name:path}")
 def process_pdf(file_name: str):
-    local_path = f"/tmp/{file_name}"
+    storage = AzureStorageService()
+    local_path = f"/tmp/{os.path.basename(file_name)}"
+    storage.download_file(file_name, local_path)
 
-    storage.download_file(file_name, local_path)   # ✅ FIX
-
-    doc_id = create_document(
+    doc_id, already_exists = create_document(
         file_name=file_name,
         blob_path=file_name,
-        container=settings.AZURE_STORAGE_CONTAINER
+        container=settings.AZURE_STORAGE_CONTAINER,
+        file_type="pdf",
     )
 
-    update_status(doc_id, "processing")
+    if already_exists:
+        return {"message": "Document already processed", "document_id": str(doc_id)}
 
+    update_status(doc_id, "processing")
     try:
-        docs = process_single_pdf(local_path, file_name, doc_id)
-        reader = PdfReader(temp_path)
-        page_count = len(reader.pages)
+        docs = process_single_pdf(local_path, file_name, doc_id, "pdf")
+        page_count = len(PdfReader(local_path).pages)
         update_page_count(doc_id, page_count)
         update_status(doc_id, "completed")
-
-    except Exception as e:
+    except Exception as exc:
         update_status(doc_id, "failed")
-        raise
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        if os.path.exists(local_path):
+            os.remove(local_path)
 
-    return {
-        "message": "processed",
-        "pages": len(docs)
-    }
+    return {"message": "processed", "pages": page_count}
 
 
 @app.get("/download/{blob_path:path}")
 def download_pdf(blob_path: str):
+    storage = AzureStorageService()
     blob_client = storage.container_client.get_blob_client(blob_path)
-
     stream = blob_client.download_blob()
     props = blob_client.get_blob_properties()
-
     return StreamingResponse(
         stream.chunks(),
         media_type="application/pdf",
         headers={
-            "Content-Disposition": f"attachment; filename={blob_path.split('/')[-1]}",
-            "Content-Length": str(props.size)
-        }
+            "Content-Disposition": f'attachment; filename="{blob_path.split("/")[-1]}"',
+            "Content-Length": str(props.size),
+        },
     )
 
-# ========================
-# 🔍 SEARCH (Member 2)
-# ========================
+
 @app.post("/search")
 async def search_documents(request: SearchRequest):
-    """
-    Exposes the Hybrid Search (BM25 + HNSW).
-    """
-    results = hybrid_search(query=request.query, top_k=request.top_k)
-    return {"results": results}
+    storage = AzureStorageService()
+    try:
+        results = hybrid_search(query=request.query, top_k=request.top_k)
+        # Serialize manually — FastAPI cannot auto-serialize dataclasses
+        return {
+            "results": [
+                {
+                    "id": r.id,
+                    "document_id": r.document_id,
+                    "file_name": r.file_name,
+                    "page_number": r.page_number,
+                    "chunk_id": r.chunk_id,
+                    "content": r.content,
+                    "rrf_score": r.rrf_score,
+                }
+                for r in results
+            ]
+        }
+    except Exception as exc:
+        logger.error(f"search failed: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
 
-# ========================
-# 💬 CHAT (Member 2)
-# ========================
+
 @app.post("/chat")
 async def chat_with_docs(request: ChatRequest):
-    """
-    RAG Pipeline: Retrieves context and generates answer using Llama.
-    """
+    storage = AzureStorageService()
     try:
         response = chat(
-            user_message=request.message, 
-            conversation_id=request.conversation_id
+            user_message=request.message,
+            conversation_id=request.conversation_id,
         )
-        return response
-    except Exception as e:
-        # Useful for debugging if Ollama isn't running
-        return {"error": str(e), "detail": "Check if Llama/Ollama is running locally"}
+        return {
+            "answer": response.answer,
+            "conversation_id": response.conversation_id,
+            "sources": [
+                {
+                    "file_name": s.file_name,
+                    "page_number": s.page_number,
+                    "chunk_id": s.chunk_id,
+                }
+                for s in response.sources
+            ],
+        }
+    except Exception as exc:
+        logger.error(f"chat failed: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
 
 @app.delete("/chat/history/{conversation_id}")
 async def reset_chat(conversation_id: str):
+    storage = AzureStorageService()
     clear_history(conversation_id)
-    return {"message": f"History for {conversation_id} cleared."}
+    return {"message": f"History for '{conversation_id}' cleared."}

@@ -1,17 +1,19 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-// https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
   server: {
+    host: '0.0.0.0',
+    port: 5173,
     proxy: {
-      '/pdfs': 'http://127.0.0.1:8000',
-      '/upload': 'http://127.0.0.1:8000',
-      '/process': 'http://127.0.0.1:8000',
-      '/download': 'http://127.0.0.1:8000',
-      '/search': 'http://127.0.0.1:8000',
-      '/chat': 'http://127.0.0.1:8000'
+      '/pdfs':     { target: 'http://api:8000', changeOrigin: true },
+      '/upload':   { target: 'http://api:8000', changeOrigin: true },
+      '/process':  { target: 'http://api:8000', changeOrigin: true },
+      '/download': { target: 'http://api:8000', changeOrigin: true },
+      '/search':   { target: 'http://api:8000', changeOrigin: true },
+      '/chat':     { target: 'http://api:8000', changeOrigin: true },
+      '/health':   { target: 'http://api:8000', changeOrigin: true },
     }
   }
 })

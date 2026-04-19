@@ -1,34 +1,33 @@
-# ── Member 1 (Rehman) — exact packages from his requirements.txt ──────────────
-azure-storage-blob
-# langchain
-# langchain-community
-langchain-core
-python-dotenv
-pypdf
-pydantic
-requests
-azure-ai-formrecognizer
-azure-ai-documentintelligence
-azure-identity
-fastapi
-uvicorn
-python-multipart
-psycopg2-binary
-sentence-transformers
-nltk
-
-# ── Member 4 (Karan) — additional packages needed for Docker to work ──────────
-pgvector>=0.2.5
+# ── Web Framework ─────────────────────────────────────────────────────────────
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+pydantic>=2.0.0
 pydantic-settings>=2.0.0
 
-# ── Member 2 (Farhan) — vector search + RAG ───────────────────────────────────
-# openai>=1.30.0
- llama-index>=0.10.40
- llama-index-embeddings-openai>=0.1.9
- llama-index-llms-openai>=0.1.16
+# ── Database ──────────────────────────────────────────────────────────────────
+psycopg2-binary>=2.9.9
+pgvector>=0.2.5
 
-# ── Member 3 (Sneha) — PDF viewer with highlights ─────────────────────────────
-streamlit>=1.35.0
-pdf2image>=1.17.0
-Pillow>=10.3.0
-tiktoken>=0.7.0
+# ── Azure ─────────────────────────────────────────────────────────────────────
+azure-storage-blob>=12.19.0
+azure-ai-documentintelligence>=1.0.0
+azure-ai-formrecognizer>=3.3.0
+azure-identity>=1.16.0
+
+# ── ML ────────────────────────────────────────────────────────────────────────
+sentence-transformers>=2.7.0
+transformers>=4.40.0
+
+# ── NLP ───────────────────────────────────────────────────────────────────────
+nltk>=3.8.0
+
+# ── LangChain (Document wrapper only) ────────────────────────────────────────
+langchain-core>=0.2.0
+
+# ── PDF ───────────────────────────────────────────────────────────────────────
+pypdf>=4.2.0
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+python-dotenv>=1.0.0
+requests>=2.31.0
