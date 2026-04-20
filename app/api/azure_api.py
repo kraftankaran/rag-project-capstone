@@ -31,8 +31,6 @@ app.add_middleware(
 )
 
 
-
-
 class ChatRequest(BaseModel):
     message: str
     conversation_id: Optional[str] = "default_session"
@@ -41,6 +39,7 @@ class ChatRequest(BaseModel):
 class SearchRequest(BaseModel):
     query: str
     top_k: Optional[int] = 5
+    search_type: Optional[str] = "content"   # ✅ ADD THIS
 
 
 @app.on_event("startup")
@@ -67,8 +66,29 @@ async def upload_pdf(file: UploadFile = File(...)):
     temp_path = f"/tmp/{file.filename}"
     doc_id = None  # must be set before try so except can always reference it
 
+    MAX_FILE_SIZE_MB = 10
+    MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
+    file_size = 0
+
     with open(temp_path, "wb") as f:
-        f.write(await file.read())
+        while True:
+            chunk = await file.read(1024 * 1024)  # 1MB chunks
+            if not chunk:
+                break
+
+            file_size += len(chunk)
+
+            if file_size > MAX_FILE_SIZE_BYTES:
+                f.close()
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File too large. Max allowed size is {MAX_FILE_SIZE_MB} MB"
+                )
+
+            f.write(chunk)
 
     try:
         ext = file.filename.rsplit(".", 1)[-1].lower()
@@ -263,10 +283,51 @@ def list_document_pages(document_name: str):
 
 @app.post("/search")
 async def search_documents(request: SearchRequest):
-    storage = AzureStorageService()
     try:
+        storage = AzureStorageService()
+
+        # =========================
+        # ✅ TITLE SEARCH (RAW PDFs ONLY)
+        # =========================
+        if request.search_type == "title":
+            blobs = storage.container_client.list_blobs(name_starts_with="pdfs/")
+
+            raw_pdfs = []
+
+            for blob in blobs:
+                path = blob.name
+
+                # ✅ ONLY raw PDFs
+                if path.startswith("pdfs/raw/") and path.endswith(".pdf"):
+                    raw_pdfs.append(path)
+
+            query_lower = request.query.lower()
+
+            # ✅ match on filename only
+            filtered = [
+                pdf for pdf in raw_pdfs
+                if query_lower in pdf.split("/")[-1].lower()
+            ]
+
+            return {
+                "results": [
+                    {
+                        "id": i,
+                        "file_name": pdf.split("/")[-1],  # clean name
+                        "page_number": None,
+                        "chunk_id": None,
+                        "content": f"Document: {pdf.split('/')[-1]}",
+                        "rrf_score": 1.0
+                    }
+                    for i, pdf in enumerate(filtered[: request.top_k])
+                ]
+            }
+
+        # =========================
+        # ✅ CONTENT SEARCH (UNCHANGED)
+        # =========================
         results = hybrid_search(query=request.query, top_k=request.top_k)
-        # Serialize manually — FastAPI cannot auto-serialize dataclasses
+
         return {
             "results": [
                 {
@@ -275,12 +336,15 @@ async def search_documents(request: SearchRequest):
                     "file_name": r.file_name,
                     "page_number": r.page_number,
                     "chunk_id": r.chunk_id,
+                    "bm25_rank":r.bm25_rank,
+                    "hnsw_rank":r.hnsw_rank,
                     "content": r.content,
                     "rrf_score": r.rrf_score,
                 }
                 for r in results
             ]
         }
+
     except Exception as exc:
         logger.error(f"search failed: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))

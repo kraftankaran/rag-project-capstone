@@ -24,14 +24,14 @@ export default function Search() {
       if (res.ok) {
         const data = await res.json();
         const mappedResults = (data.results || []).map((r, i) => ({
-          id: r.id || i,
-          title: r.file_name ? r.file_name.split('/').pop() : `Result ${i+1}`,
-          document: r.file_name || "Unknown",
-          page: r.page_number || "N/A",
-          chunk: r.chunk_id || "N/A",
-          snippet: r.content || "No content available",
-          relevance: r.rrf_score || r.score || 0.0
-        }));
+        id: r.id || i,
+        title: r.file_name ? r.file_name.split('/').pop() : `Result ${i+1}`,
+        document: r.file_name || "Unknown",
+        page: searchType === "content" ? r.page_number : null,
+        chunk: searchType === "content" ? r.chunk_id : null,
+        snippet: r.content || "No content available",
+        relevance: r.rrf_score || r.score || 0.0
+      }));
         setResults(mappedResults);
       } else {
         setResults([]);
