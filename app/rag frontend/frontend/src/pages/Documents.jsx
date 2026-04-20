@@ -85,14 +85,14 @@ export default function Documents() {
     setFile(null);
   };
 
-  const handleProcess = async (fileName) => {
+  /*const handleProcess = async (fileName) => {
     try {
       await fetch(`/process/${fileName}`, { method: "POST" });
       alert(`Processing started for ${fileName}`);
     } catch (e) {
       console.error("Process failed", e);
     }
-  };
+  };*/
 
   const handleDownload = (fileName) => {
     window.open(`/download-full/${fileName}`, '_blank');
@@ -276,9 +276,9 @@ export default function Documents() {
                       >
                         <MessageSquare size={16} /> Chat
                       </button>
-                      <button className="btn btn-secondary" onClick={() => handleProcess(fileName)} title="Process Document">
+                      {/*<button className="btn btn-secondary" onClick={() => handleProcess(fileName)} title="Process Document">
                         <Play size={16} />
-                      </button>
+                      </button>*/}
                       <button className="btn btn-ghost" onClick={() => handleDownload(fileName)} title="Download Document">
                         <Download size={16} />
                       </button>
