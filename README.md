@@ -2,6 +2,7 @@
 A production-grade Retrieval-Augmented Generation (RAG) system for querying PDF documents using natural language.
 NeuralRAG lets you upload documents and get precise, cited answers grounded strictly in your data — no hallucinations, no external APIs required.
 
+-----------------------------------------------
 
 🚀 Features
 
@@ -17,6 +18,7 @@ NeuralRAG lets you upload documents and get precise, cited answers grounded stri
 
 🏠 Fully local + on-prem friendly (no paid LLM APIs)
 
+-----------------------------------------------
 
 🏗️ Architecture
 React (Vite) → FastAPI → PostgreSQL (pgvector)
@@ -24,6 +26,8 @@ React (Vite) → FastAPI → PostgreSQL (pgvector)
                 Azure OCR + Blob Storage
                           ↓
                       Ollama LLM
+                      
+-----------------------------------------------
 
 Core Components
 
@@ -41,6 +45,7 @@ Embeddings: all-mpnet-base-v2
 
 Re-ranking: cross-encoder/ms-marco-MiniLM
 
+-----------------------------------------------
 
 ⚙️ How It Works
 1. Ingestion Pipeline
@@ -80,6 +85,7 @@ Context expanded (adjacent chunks)
 
 Sent to LLM → grounded answer + citations
 
+-----------------------------------------------
 
 🧰 Tech Stack
 
@@ -104,6 +110,7 @@ Ollama (llama3, mistral)
 DevOps
 Docker + Docker Compose
 
+-----------------------------------------------
 
 📦 Setup
 1. Prerequisites
@@ -141,7 +148,7 @@ ollama serve
 4. Run the App
 docker compose up --build
 
-
+-----------------------------------------------
 🌐 Access
 
 Service
@@ -155,6 +162,7 @@ http://localhost:8000/docs
 Health Check
 http://localhost:8000/health
 
+-----------------------------------------------
 
 🧪 API Usage
 Upload PDF
@@ -174,6 +182,7 @@ POST /chat
   "conversation_id": "test1"
 }
 
+-----------------------------------------------
 
 🗄️ Database Design
 
@@ -218,6 +227,7 @@ OCR cost (Azure)
 
 Slower responses on CPU LLM
 
+-----------------------------------------------
 
 🔮 Future Improvements
 
@@ -233,6 +243,7 @@ Multilingual support
 
 Evaluation pipeline (RAGAS)
 
+-----------------------------------------------
 
 📁 Project Structure
 app/
@@ -248,6 +259,7 @@ docker/
  ├── init-db.sql
 docker-compose.yml
 
+-----------------------------------------------
 
 🧠 Why NeuralRAG?
 Unlike traditional search:
