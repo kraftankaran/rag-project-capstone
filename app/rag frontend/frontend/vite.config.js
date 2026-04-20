@@ -3,11 +3,20 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
+
+  // pdfjs-dist v5 ships as an ES module with a web worker.
+  // Excluding it from Vite's pre-bundling step ensures the
+  // `?url` worker import resolves correctly at runtime.
+  optimizeDeps: {
+    exclude: ['pdfjs-dist'],
+  },
+
   server: {
     host: '0.0.0.0',
     port: 5173,
     proxy: {
       '/pdfs':     { target: 'http://api:8000', changeOrigin: true },
+      '/pages':    { target: 'http://api:8000', changeOrigin: true },
       '/upload':   { target: 'http://api:8000', changeOrigin: true },
       '/process':  { target: 'http://api:8000', changeOrigin: true },
       '/download': { target: 'http://api:8000', changeOrigin: true },

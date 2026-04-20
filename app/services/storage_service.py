@@ -19,12 +19,45 @@ class AzureStorageService:
         )
 
     def list_pdfs(self):
+        """
+        Original method — returns ALL PDF blob paths.
+        Kept for backward compatibility with any internal callers.
+        """
         blobs = [
             blob.name
             for blob in self.container_client.list_blobs()
             if blob.name.endswith(".pdf")
         ]
         logger.info(f"Found {len(blobs)} PDFs in Azure")
+        return blobs
+
+    def list_raw_pdfs(self):
+        """
+        Returns only the original uploaded PDFs under pdfs/raw/.
+        Used by the /pdfs API endpoint so the frontend never sees
+        page-level or intermediate blobs.
+        """
+        blobs = [
+            blob.name
+            for blob in self.container_client.list_blobs(name_starts_with="pdfs/raw/")
+            if blob.name.endswith(".pdf")
+        ]
+        logger.info(f"Found {len(blobs)} raw PDFs in Azure")
+        return blobs
+
+    def list_pages(self, base_doc_name: str):
+        """
+        Returns page blob paths for a given document.
+        Azure structure: pdfs/<base_doc_name>/<base_doc_name>_page_N.pdf
+        """
+        prefix = f"pdfs/{base_doc_name}/"
+        blobs = [
+            blob.name
+            for blob in self.container_client.list_blobs(name_starts_with=prefix)
+            if blob.name.endswith(".pdf")
+        ]
+        blobs.sort()   # ensure page order
+        logger.info(f"Found {len(blobs)} pages for '{base_doc_name}'")
         return blobs
 
     def download_file(self, blob_path: str, local_path: str):

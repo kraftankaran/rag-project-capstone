@@ -1,432 +1,533 @@
+// src/pages/Workspace.jsx
 import { useState, useRef, useEffect } from "react";
-import { useSearchParams, useNavigate } from "react-router-dom";
-import { Document, Page, pdfjs } from "react-pdf";
+import { useSearchParams } from "react-router-dom";
 import Markdown from "react-markdown";
-import { Send, Maximize2, Minimize2, ChevronLeft, ChevronRight, Loader2, Search, FileText, Plus, History, PanelLeftClose, PanelLeftOpen } from "lucide-react";
-import "react-pdf/dist/Page/AnnotationLayer.css";
-import "react-pdf/dist/Page/TextLayer.css";
+import {
+  Send, Loader2, Search, FileText, Plus,
+  PanelLeftClose, PanelLeftOpen, X, Download,
+} from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import { sendChat, clearHistory, downloadUrl, listPdfs } from "../api";
+import { useDocContext } from "../context/DocContext";
 
-// Configure PDF worker
-pdfjs.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
+// ── RankBadge — small coloured chip for BM25 / HNSW / RRF ───────────────────
+function RankBadge({ label, value, color, bg, border }) {
+  if (value == null) return null;
+  const display = typeof value === "number" && value < 1
+    ? value.toFixed(4)   // rrf_score is a small float
+    : `#${value}`;       // bm25_rank / hnsw_rank are 1-based integers
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", gap: "3px",
+      fontSize: "0.68rem", fontWeight: 600,
+      padding: "2px 7px", borderRadius: "4px",
+      background: bg, border: `1px solid ${border}`, color,
+    }}>
+      {label} {display}
+    </span>
+  );
+}
 
+// ── Source card shown in the right panel ─────────────────────────────────────
+function SourceCard({ source, index }) {
+  const fileName = String(source.file_name ?? "").split("/").pop();
+  const blobPath = source.file_name ?? "";
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, x: 12 }}
+      animate={{ opacity: 1, x: 0 }}
+      transition={{ delay: index * 0.06 }}
+      style={{
+        background: "var(--card)", border: "1px solid var(--border)",
+        borderRadius: "var(--radius)", padding: "0.875rem",
+        display: "flex", flexDirection: "column", gap: "0.5rem",
+      }}
+    >
+      {/* Header row */}
+      <div style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem" }}>
+        <div style={{ background: "rgba(59,130,246,0.1)", padding: "0.35rem", borderRadius: "6px", flexShrink: 0 }}>
+          <FileText size={14} color="var(--primary)" />
+        </div>
+        <div style={{ flex: 1, overflow: "hidden" }}>
+          <p style={{
+            fontWeight: 600, fontSize: "0.8rem",
+            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+            color: "var(--foreground)",
+          }}>
+            {fileName}
+          </p>
+          <p style={{ fontSize: "0.7rem", color: "var(--muted-foreground)", marginTop: "1px" }}>
+            Page {source.page_number ?? "–"}
+            {source.chunk_id != null && ` · Chunk ${source.chunk_id}`}
+          </p>
+        </div>
+        {/* Download link */}
+        {blobPath && (
+          <a
+            href={downloadUrl(blobPath)}
+            download={fileName}
+            title="Download source PDF"
+            style={{ color: "var(--muted-foreground)", flexShrink: 0 }}
+          >
+            <Download size={13} />
+          </a>
+        )}
+      </div>
+
+      {/* Ranking metadata */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
+        <RankBadge
+          label="RRF"
+          value={source.rrf_score}
+          color="var(--accent)"
+          bg="rgba(34,211,238,0.08)"
+          border="rgba(34,211,238,0.25)"
+        />
+        <RankBadge
+          label="BM25"
+          value={source.bm25_rank}
+          color="var(--primary)"
+          bg="rgba(59,130,246,0.08)"
+          border="rgba(59,130,246,0.2)"
+        />
+        <RankBadge
+          label="HNSW"
+          value={source.hnsw_rank}
+          color="#a855f7"
+          bg="rgba(168,85,247,0.08)"
+          border="rgba(168,85,247,0.2)"
+        />
+      </div>
+    </motion.div>
+  );
+}
+
+// ── Workspace ─────────────────────────────────────────────────────────────────
 export default function Workspace() {
   const [searchParams] = useSearchParams();
-  const docsParam = searchParams.get("docs");
-  const singleDocParam = searchParams.get("doc");
-  
-  let docs = [];
-  if (docsParam) {
-    docs = docsParam.split(',').filter(Boolean);
-  } else if (singleDocParam) {
-    docs = [singleDocParam];
-  }
-  
-  const chatIdParam = searchParams.get("chat_id");
-  
-  const [query, setQuery] = useState("");
+  const { selectedBlobs, toggle, clearSelection } = useDocContext();
+
+  // Blobs from URL param (set when navigating from Documents page)
+  const blobsParam = searchParams.get("blobs");
+  const urlBlobs = blobsParam
+    ? blobsParam.split(",").map(decodeURIComponent).filter(Boolean)
+    : null;
+
+  // Active context = URL blobs OR global context selection
+  const activeBlobPaths = urlBlobs ?? Array.from(selectedBlobs);
+
+  // All docs for the left sidebar doc-selector
+  const [allDocs, setAllDocs] = useState([]);
+  useEffect(() => {
+    listPdfs()
+      .then((d) => setAllDocs(d.filter((x) => x.blobPath.startsWith("pdfs/raw/"))))
+      .catch(() => {});
+  }, []);
+
   const [messages, setMessages] = useState([]);
+  const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
-  const [isExpanded, setIsExpanded] = useState(false);
-  const [isHistoryCollapsed, setIsHistoryCollapsed] = useState(false);
-  const [activeChatTitle, setActiveChatTitle] = useState("");
-  const navigate = useNavigate();
+
+  // Sources panel: always shows the sources of the most recent bot message
+  const [latestSources, setLatestSources] = useState([]);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isSourcesCollapsed, setIsSourcesCollapsed] = useState(false);
+
+  // Stable session ID — regenerated on "New Chat"
+  const sessionId = useRef(`session_${Date.now()}`);
   const endRef = useRef(null);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
-  const mockHistories = [
-    { id: "chat_1", title: "Data Engineering Q&A", messages: [
-      { role: "user", text: "What is the main architecture of the Data Engineering pipeline?" },
-      { role: "bot", text: "The pipeline consists of ingesting raw data from Azure Blob Storage, processing it using Azure Databricks, and finally storing the refined data in a PostgreSQL database managed by pgvector for semantic search capabilities." },
-      { role: "user", text: "How is it secured?" },
-      { role: "bot", text: "Security is managed through Azure Service Principals, with role-based access control (RBAC) ensuring only authorized microservices can access the storage and database endpoints." }
-    ]},
-    { id: "chat_2", title: "System Architecture", messages: [
-      { role: "user", text: "Can you explain the system architecture?" },
-      { role: "bot", text: "Certainly. The system uses a FastAPI backend integrated with Azure Document Intelligence for OCR. Processed documents are embedded using an LLM and stored in PostgreSQL with pgvector. The frontend is built with React." }
-    ]},
-    { id: "chat_3", title: "Model Deployment Guide", messages: [
-      { role: "user", text: "How do we deploy the models?" },
-      { role: "bot", text: "Models are deployed using Docker containers. The `docker-compose.yml` orchestrates the API, Database, and Frontend containers simultaneously to ensure a consistent deployment environment." }
-    ]}
-  ];
+  // ── New Chat ─────────────────────────────────────────────────────────────
+  // FIX: properly awaits clearHistory, resets ALL state including selection,
+  // and generates a fresh sessionId that React can observe via state.
+  const [sessionKey, setSessionKey] = useState(0); // forces re-render on new chat
 
-  useEffect(() => {
-    if (chatIdParam) {
-      const history = mockHistories.find(h => h.id === chatIdParam);
-      if (history) {
-        setMessages(history.messages);
-        setActiveChatTitle(history.title);
-      }
-    } else {
-      setMessages([]);
-      setActiveChatTitle("");
-    }
-  }, [chatIdParam]);
-
-  const handleAsk = async () => {
-    if (!query.trim()) return;
-
-    const userMsg = { role: "user", text: query };
-    setMessages((prev) => [...prev, userMsg]);
-    setLoading(true);
+  const handleNewChat = async () => {
+    // 1. Tell backend to drop the old history
+    await clearHistory(sessionId.current);
+    // 2. Rotate session ID
+    sessionId.current = `session_${Date.now()}`;
+    // 3. Reset all local state
+    setMessages([]);
+    setLatestSources([]);
     setQuery("");
+    setSessionKey((k) => k + 1); // triggers re-render if needed
+    // 4. Clear selected documents so context resets to "all docs"
+    clearSelection();
+  };
+
+  // ── Send message ──────────────────────────────────────────────────────────
+  const handleAsk = async () => {
+    if (!query.trim() || loading) return;
+    const text = query.trim();
+    setQuery("");
+    setMessages((prev) => [...prev, { role: "user", text }]);
+    setLoading(true);
 
     try {
-      // Append instruction to filter by selected docs if there are multiple or specific docs open
-      let payloadMessage = userMsg.text;
-      if (docs.length > 0) {
-        payloadMessage = `[INSTRUCTION: Restrict your knowledge and answers ONLY to the content found in the following documents: ${docs.map(d => d.split('/').pop()).join(', ')}. Do not use other documents.]\n\n${userMsg.text}`;
-      }
-
-      const res = await fetch("/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: payloadMessage, conversation_id: "default_session" }),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        setMessages((prev) => [...prev, { role: "bot", text: data.answer || "No response received." }]);
-      } else {
-        setMessages((prev) => [...prev, { role: "bot", text: "Error: Could not retrieve response from the server." }]);
-      }
+      const data = await sendChat(text, sessionId.current, activeBlobPaths);
+      const sources = data.sources ?? [];
+      setMessages((prev) => [
+        ...prev,
+        { role: "bot", text: data.answer ?? "No response.", sources },
+      ]);
+      // Update the sources panel with the latest response's sources
+      setLatestSources(sources);
     } catch (e) {
-      console.error("Chat API failed", e);
-      setMessages((prev) => [...prev, { role: "bot", text: "Error: Connection to the server failed." }]);
+      setMessages((prev) => [...prev, { role: "bot", text: `Error: ${e.message}`, sources: [] }]);
+      setLatestSources([]);
+    } finally {
+      setLoading(false);
     }
-
-    setLoading(false);
   };
 
   const onKeyDown = (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleAsk();
-    }
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleAsk(); }
   };
 
+  const contextLabel =
+    activeBlobPaths.length === 0
+      ? "All documents"
+      : activeBlobPaths.map((p) => p.split("/").pop()).join(", ");
+
   return (
-    <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
-      
-      {/* Workspace Left Sidebar: Chat History */}
-      <motion.div 
-        animate={{ width: isHistoryCollapsed ? '50px' : '260px' }}
-        transition={{ duration: 0.3, ease: "easeInOut" }}
+    <div style={{ display: "flex", height: "100%", overflow: "hidden" }}>
+
+      {/* ── Left: doc selector sidebar ───────────────────────────────────── */}
+      <motion.div
+        animate={{ width: isSidebarCollapsed ? "50px" : "240px" }}
+        transition={{ duration: 0.25, ease: "easeInOut" }}
         style={{
-          borderRight: '1px solid var(--border)',
-          backgroundColor: 'var(--sidebar-bg)',
-          display: 'flex',
-          flexDirection: 'column',
-          zIndex: 5
+          borderRight: "1px solid var(--border)",
+          backgroundColor: "var(--sidebar-bg)",
+          display: "flex", flexDirection: "column", zIndex: 5, overflow: "hidden", flexShrink: 0,
         }}
       >
-        <div style={{ padding: '1rem', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: isHistoryCollapsed ? 'center' : 'space-between', alignItems: 'center' }}>
-          {!isHistoryCollapsed && <span style={{ fontWeight: 600, fontSize: '0.875rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}><History size={16} /> Recent Chats</span>}
-          <button 
-            className="btn btn-ghost" 
-            style={{ padding: '0.25rem' }}
-            onClick={() => setIsHistoryCollapsed(!isHistoryCollapsed)}
-            title="Toggle History Sidebar"
+        {/* Sidebar header */}
+        <div style={{
+          padding: "0.875rem 0.875rem", borderBottom: "1px solid var(--border)",
+          display: "flex", justifyContent: isSidebarCollapsed ? "center" : "space-between",
+          alignItems: "center", flexShrink: 0,
+        }}>
+          {!isSidebarCollapsed && (
+            <span style={{ fontWeight: 600, fontSize: "0.78rem", color: "var(--muted-foreground)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+              Context
+            </span>
+          )}
+          <button
+            className="btn btn-ghost"
+            style={{ padding: "0.25rem" }}
+            onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+            title={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
-            {isHistoryCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+            {isSidebarCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
           </button>
         </div>
 
-        {!isHistoryCollapsed && (
-          <div style={{ padding: '1rem', flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-            <button 
-              className="btn btn-primary" 
-              style={{ width: '100%', marginBottom: '1rem', padding: '0.5rem', display: 'flex', justifyContent: 'center' }}
-              onClick={() => {
-                setMessages([]);
-                setActiveChatTitle("");
-                navigate('/workspace');
-              }}
+        {!isSidebarCollapsed && (
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", padding: "0.75rem" }}>
+            {/* New Chat button */}
+            <button
+              className="btn btn-primary"
+              style={{ width: "100%", marginBottom: "0.875rem", justifyContent: "center", padding: "0.5rem" }}
+              onClick={handleNewChat}
             >
-              <Plus size={16} /> New Chat
+              <Plus size={15} /> New Chat
             </button>
 
-            <div className="custom-scrollbar" style={{ overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-              {mockHistories.map((chat) => (
-                <button
-                  key={chat.id}
-                  onClick={() => navigate(`/workspace?chat_id=${chat.id}`)}
-                  style={{
-                    display: 'block',
-                    width: '100%',
-                    textAlign: 'left',
-                    padding: '0.75rem',
-                    backgroundColor: chatIdParam === chat.id ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
-                    border: chatIdParam === chat.id ? '1px solid rgba(59, 130, 246, 0.3)' : '1px solid transparent',
-                    color: chatIdParam === chat.id ? 'var(--primary-foreground)' : 'var(--muted-foreground)',
-                    cursor: 'pointer',
-                    borderRadius: 'var(--radius)',
-                    fontSize: '0.875rem',
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    transition: 'all 0.2s ease',
-                  }}
-                  onMouseOver={(e) => {
-                    if (chatIdParam !== chat.id) {
-                      e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.05)';
-                      e.currentTarget.style.color = 'var(--foreground)';
-                    }
-                  }}
-                  onMouseOut={(e) => {
-                    if (chatIdParam !== chat.id) {
-                      e.currentTarget.style.backgroundColor = 'transparent';
-                      e.currentTarget.style.color = 'var(--muted-foreground)';
-                    }
-                  }}
-                >
-                  {chat.title}
-                </button>
-              ))}
+            {/* Context status */}
+            <p style={{ fontSize: "0.7rem", color: "var(--muted-foreground)", marginBottom: "0.6rem", lineHeight: 1.4 }}>
+              {activeBlobPaths.length === 0
+                ? "Using all documents"
+                : `Using ${activeBlobPaths.length} selected document${activeBlobPaths.length > 1 ? "s" : ""}`}
+            </p>
+
+            {/* Document list */}
+            <p style={{ fontSize: "0.68rem", fontWeight: 600, color: "var(--muted-foreground)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "0.4rem" }}>
+              Documents
+            </p>
+            <div className="custom-scrollbar" style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "1px" }}>
+              {allDocs.length === 0 && (
+                <p style={{ fontSize: "0.75rem", color: "var(--muted-foreground)", padding: "0.25rem 0" }}>No documents found.</p>
+              )}
+              {allDocs.map((doc) => {
+                const isActive = selectedBlobs.has(doc.blobPath);
+                return (
+                  <label
+                    key={doc.blobPath}
+                    style={{
+                      display: "flex", alignItems: "center", gap: "0.45rem",
+                      padding: "0.45rem 0.35rem", cursor: "pointer", borderRadius: "6px",
+                      backgroundColor: isActive ? "rgba(59,130,246,0.12)" : "transparent",
+                      transition: "background 0.15s",
+                    }}
+                    onMouseOver={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.04)"; }}
+                    onMouseOut={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = "transparent"; }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isActive}
+                      onChange={() => toggle(doc.blobPath)}
+                      style={{ accentColor: "var(--primary)", cursor: "pointer", width: "12px", height: "12px", flexShrink: 0 }}
+                    />
+                    <span style={{
+                      fontSize: "0.77rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                      color: isActive ? "var(--foreground)" : "var(--muted-foreground)",
+                    }}>
+                      {doc.name}
+                    </span>
+                  </label>
+                );
+              })}
             </div>
+
+            {selectedBlobs.size > 0 && (
+              <button
+                className="btn btn-ghost"
+                style={{ fontSize: "0.73rem", padding: "0.3rem", marginTop: "0.5rem" }}
+                onClick={clearSelection}
+              >
+                <X size={12} /> Clear selection
+              </button>
+            )}
           </div>
         )}
       </motion.div>
 
-      {/* Middle side: PDF Viewer */}
-      <div style={{ 
-        flex: isExpanded ? 1 : 1.2, 
-        borderRight: '1px solid var(--border)', 
-        display: 'flex', 
-        flexDirection: 'column',
-        backgroundColor: '#1f2229', 
-        transition: 'flex 0.3s ease'
-      }}>
-        <div style={{ padding: '1rem', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'var(--background)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <FileText size={20} color="var(--primary)" />
-            <span style={{ fontWeight: 600 }}>Document Preview ({docs.length})</span>
+      {/* ── Centre: Chat ─────────────────────────────────────────────────── */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", backgroundColor: "var(--background)", minWidth: 0 }}>
+
+        {/* Chat header */}
+        <div style={{
+          padding: "0.875rem 1.5rem", borderBottom: "1px solid var(--border)",
+          display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0,
+        }}>
+          <div>
+            <h2 style={{ fontSize: "1.05rem", fontWeight: 700, marginBottom: "0.1rem" }}>AI Workspace</h2>
+            <p style={{
+              fontSize: "0.75rem", color: "var(--muted-foreground)",
+              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "380px",
+            }}>
+              Context: {contextLabel}
+            </p>
           </div>
-          <button className="btn btn-ghost" onClick={() => setIsExpanded(!isExpanded)} title="Toggle layout">
-            {isExpanded ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+          <button
+            className="btn btn-ghost"
+            style={{ fontSize: "0.78rem", padding: "0.4rem 0.8rem" }}
+            onClick={handleNewChat}
+            title="Start a new conversation"
+          >
+            <Plus size={14} /> New Chat
           </button>
         </div>
-        
-        <div className="custom-scrollbar" style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '2rem' }}>
-          {docs.length > 0 ? (
-            docs.map((doc, idx) => (
-              <PdfViewer key={idx} docParam={doc} isExpanded={isExpanded} />
-            ))
-          ) : (
-            <div style={{ boxShadow: 'var(--shadow-lg)', backgroundColor: 'white', minHeight: '800px', minWidth: '600px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#666' }}>
-              <FileText size={64} style={{ opacity: 0.2, marginBottom: '1rem' }} />
-              <p>No document selected</p>
-              <p style={{ fontSize: '0.875rem' }}>Select documents from the library to preview</p>
-            </div>
-          )}
-        </div>
-      </div>
 
-      {/* Right side: Chat */}
-      <div style={{ flex: isExpanded ? 1.5 : 1, display: 'flex', flexDirection: 'column', backgroundColor: 'var(--background)', transition: 'flex 0.3s ease' }}>
-        <div style={{ padding: '1rem', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <h2 style={{ fontSize: '1.25rem', marginBottom: '0.25rem' }}>AI Workspace</h2>
-            {activeChatTitle ? (
-              <p style={{ color: 'var(--muted-foreground)', fontSize: '0.875rem' }}>Viewing History: {activeChatTitle}</p>
-            ) : (
-              <p style={{ color: 'var(--muted-foreground)', fontSize: '0.875rem' }}>Ask questions about your documents</p>
-            )}
-          </div>
-        </div>
-        
-        <div className="custom-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+        {/* Messages */}
+        <div
+          className="custom-scrollbar"
+          style={{ flex: 1, overflowY: "auto", padding: "1.5rem", display: "flex", flexDirection: "column", gap: "1.25rem" }}
+        >
           {messages.length === 0 && (
-            <div style={{ margin: 'auto', textAlign: 'center', color: 'var(--muted-foreground)' }}>
-              <div style={{ background: 'var(--muted)', display: 'inline-block', padding: '1rem', borderRadius: '50%', marginBottom: '1rem' }}>
-                <Search size={32} color="var(--primary)" />
+            <div style={{ margin: "auto", textAlign: "center", color: "var(--muted-foreground)" }}>
+              <div style={{ background: "var(--muted)", display: "inline-block", padding: "1rem", borderRadius: "50%", marginBottom: "1rem" }}>
+                <Search size={28} color="var(--primary)" />
               </div>
-              <h3 style={{ fontSize: '1.2rem', fontWeight: 600, color: 'var(--foreground)' }}>Ask anything</h3>
-              <p style={{ marginTop: '0.5rem', maxWidth: '300px' }}>Ask questions, extract information, or summarize the document.</p>
+              <h3 style={{ fontSize: "1.1rem", fontWeight: 600, color: "var(--foreground)", marginBottom: "0.5rem" }}>
+                Ask anything
+              </h3>
+              <p style={{ fontSize: "0.875rem", maxWidth: "300px", lineHeight: 1.5 }}>
+                {activeBlobPaths.length > 0
+                  ? `Answering from ${activeBlobPaths.length} selected document${activeBlobPaths.length > 1 ? "s" : ""}.`
+                  : "Answering from all available documents."}
+              </p>
             </div>
           )}
 
           {messages.map((m, i) => (
-            <motion.div 
-              initial={{ opacity: 0, y: 10 }}
+            <motion.div
+              key={i}
+              initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
-              key={i} 
-              style={{ display: 'flex', justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}
+              style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}
             >
               {m.role === "bot" && (
-                <div style={{ background: 'linear-gradient(135deg, var(--primary), var(--accent))', width: '32px', height: '32px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginRight: '1rem' }}>
-                  <span style={{ color: 'white', fontWeight: 'bold', fontSize: '14px' }}>AI</span>
+                <div style={{
+                  background: "linear-gradient(135deg, var(--primary), var(--accent))",
+                  width: "30px", height: "30px", borderRadius: "50%",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  flexShrink: 0, marginRight: "0.75rem", marginTop: "2px",
+                }}>
+                  <span style={{ color: "white", fontWeight: 700, fontSize: "11px" }}>AI</span>
                 </div>
               )}
-              <div style={{
-                maxWidth: '80%',
-                padding: '1rem 1.25rem',
-                borderRadius: '1rem',
-                backgroundColor: m.role === "user" ? 'var(--primary)' : 'var(--card)',
-                color: m.role === "user" ? 'var(--primary-foreground)' : 'var(--foreground)',
-                border: m.role === "bot" ? '1px solid var(--border)' : 'none',
-                boxShadow: 'var(--shadow)',
-                fontSize: '0.95rem',
-                lineHeight: 1.6
-              }}>
-                {m.role === "bot" ? (
-                  <Markdown>{m.text}</Markdown>
-                ) : (
-                  m.text
+              <div style={{ maxWidth: "78%" }}>
+                <div style={{
+                  padding: "0.875rem 1.1rem", borderRadius: "1rem",
+                  backgroundColor: m.role === "user" ? "var(--primary)" : "var(--card)",
+                  color: m.role === "user" ? "var(--primary-foreground)" : "var(--foreground)",
+                  border: m.role === "bot" ? "1px solid var(--border)" : "none",
+                  boxShadow: "var(--shadow)", fontSize: "0.9rem", lineHeight: 1.65,
+                }}>
+                  {m.role === "bot" ? <Markdown>{m.text}</Markdown> : m.text}
+                </div>
+
+                {/* Inline source pills below bot message */}
+                {m.role === "bot" && m.sources?.length > 0 && (
+                  <div style={{ marginTop: "0.4rem", display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
+                    {m.sources.map((s, si) => (
+                      <span
+                        key={si}
+                        style={{
+                          fontSize: "0.68rem", background: "var(--muted)",
+                          border: "1px solid var(--border)", padding: "2px 7px",
+                          borderRadius: "4px", color: "var(--muted-foreground)",
+                        }}
+                      >
+                        {String(s.file_name ?? "").split("/").pop()} p.{s.page_number}
+                      </span>
+                    ))}
+                  </div>
                 )}
               </div>
             </motion.div>
           ))}
 
+          {/* Typing indicator */}
           {loading && (
-             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ display: 'flex', justifyContent: 'flex-start' }}>
-               <div style={{ background: 'linear-gradient(135deg, var(--primary), var(--accent))', width: '32px', height: '32px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginRight: '1rem' }}>
-                  <span style={{ color: 'white', fontWeight: 'bold', fontSize: '14px' }}>AI</span>
-               </div>
-               <div style={{
-                 padding: '1rem 1.25rem',
-                 borderRadius: '1rem',
-                 backgroundColor: 'var(--card)',
-                 border: '1px solid var(--border)',
-                 display: 'flex',
-                 alignItems: 'center',
-                 gap: '0.5rem'
-               }}>
-                 <span style={{ width: '6px', height: '6px', background: 'var(--primary)', borderRadius: '50%', animation: 'pulse 1.5s infinite' }} />
-                 <span style={{ width: '6px', height: '6px', background: 'var(--primary)', borderRadius: '50%', animation: 'pulse 1.5s infinite 0.2s' }} />
-                 <span style={{ width: '6px', height: '6px', background: 'var(--primary)', borderRadius: '50%', animation: 'pulse 1.5s infinite 0.4s' }} />
-               </div>
-             </motion.div>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ display: "flex" }}>
+              <div style={{
+                background: "linear-gradient(135deg, var(--primary), var(--accent))",
+                width: "30px", height: "30px", borderRadius: "50%",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                flexShrink: 0, marginRight: "0.75rem",
+              }}>
+                <span style={{ color: "white", fontWeight: 700, fontSize: "11px" }}>AI</span>
+              </div>
+              <div style={{
+                padding: "0.875rem 1.1rem", borderRadius: "1rem",
+                backgroundColor: "var(--card)", border: "1px solid var(--border)",
+                display: "flex", alignItems: "center", gap: "0.4rem",
+              }}>
+                {[0, 0.2, 0.4].map((delay, k) => (
+                  <span key={k} style={{
+                    width: "5px", height: "5px", background: "var(--primary)",
+                    borderRadius: "50%", animation: `pulse 1.5s infinite ${delay}s`,
+                  }} />
+                ))}
+              </div>
+            </motion.div>
           )}
           <div ref={endRef} />
         </div>
 
-        <div style={{ padding: '1.5rem', borderTop: '1px solid var(--border)', backgroundColor: 'var(--card)' }}>
-          <div style={{ 
-            position: 'relative', 
-            display: 'flex', 
-            alignItems: 'flex-end',
-            backgroundColor: 'var(--background)',
-            border: '1px solid var(--border)',
-            borderRadius: '1rem',
-            padding: '0.5rem'
+        {/* Input bar */}
+        <div style={{ padding: "1rem 1.5rem", borderTop: "1px solid var(--border)", backgroundColor: "var(--card)", flexShrink: 0 }}>
+          <div style={{
+            display: "flex", alignItems: "flex-end",
+            backgroundColor: "var(--background)", border: "1px solid var(--border)",
+            borderRadius: "1rem", padding: "0.4rem",
           }}>
             <textarea
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={onKeyDown}
-              placeholder="Ask a question about the document... (Press Enter to send)"
+              placeholder="Ask a question… (Enter to send, Shift+Enter for newline)"
               rows={1}
-              style={{
-                flex: 1,
-                resize: 'none',
-                padding: '0.75rem',
-                border: 'none',
-                backgroundColor: 'transparent',
-                color: 'var(--foreground)',
-                outline: 'none',
-                fontSize: '0.95rem',
-                minHeight: '44px',
-                maxHeight: '120px'
-              }}
               className="custom-scrollbar"
+              style={{
+                flex: 1, resize: "none", padding: "0.65rem 0.75rem",
+                border: "none", backgroundColor: "transparent",
+                color: "var(--foreground)", outline: "none",
+                fontSize: "0.9rem", minHeight: "40px", maxHeight: "120px",
+              }}
             />
-            <button 
+            <button
               onClick={handleAsk}
               disabled={!query.trim() || loading}
               style={{
-                background: query.trim() ? 'var(--primary)' : 'var(--muted)',
-                color: query.trim() ? 'var(--primary-foreground)' : 'var(--muted-foreground)',
-                border: 'none',
-                borderRadius: '50%',
-                width: '40px',
-                height: '40px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: query.trim() ? 'pointer' : 'not-allowed',
-                transition: 'all 0.2s ease',
-                margin: '4px'
+                background: query.trim() && !loading ? "var(--primary)" : "var(--muted)",
+                color: query.trim() && !loading ? "var(--primary-foreground)" : "var(--muted-foreground)",
+                border: "none", borderRadius: "50%",
+                width: "36px", height: "36px",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                cursor: query.trim() && !loading ? "pointer" : "not-allowed",
+                transition: "all 0.2s ease", margin: "2px", flexShrink: 0,
               }}
             >
-              <Send size={18} style={{ transform: 'translateX(-1px)' }} />
+              {loading
+                ? <Loader2 size={16} className="animate-spin" />
+                : <Send size={16} style={{ transform: "translateX(-1px)" }} />}
             </button>
           </div>
-          <p style={{ textAlign: 'center', fontSize: '0.75rem', color: 'var(--muted-foreground)', marginTop: '0.75rem' }}>
-            NeuralRAG can make mistakes. Consider verifying important information.
+          <p style={{ textAlign: "center", fontSize: "0.68rem", color: "var(--muted-foreground)", marginTop: "0.5rem" }}>
+            NeuralRAG may make mistakes. Verify important information.
           </p>
         </div>
       </div>
-    </div>
-  );
-}
 
-function PdfViewer({ docParam, isExpanded }) {
-  const [numPages, setNumPages] = useState(null);
-  const [pageNumber, setPageNumber] = useState(1);
-
-  function onDocumentLoadSuccess({ numPages }) {
-    setNumPages(numPages);
-  }
-
-  return (
-    <div style={{ marginBottom: '3rem', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-      <div style={{ 
-        width: '100%', 
-        maxWidth: isExpanded ? '550px' : '750px',
-        padding: '0.75rem 1rem', 
-        backgroundColor: 'var(--card)', 
-        border: '1px solid var(--border)',
-        borderRadius: '8px 8px 0 0',
-        display: 'flex', 
-        justifyContent: 'space-between', 
-        alignItems: 'center' 
-      }}>
-        <div style={{ fontWeight: 600, fontSize: '0.875rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '60%' }}>
-          {docParam.split('/').pop()}
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'var(--muted)', padding: '0.25rem', borderRadius: 'var(--radius)' }}>
-          <button 
-            className="btn btn-ghost" 
-            style={{ padding: '0.25rem' }} 
-            onClick={() => setPageNumber(p => Math.max(1, p - 1))}
-            disabled={pageNumber <= 1}
+      {/* ── Right: Sources panel ─────────────────────────────────────────── */}
+      <motion.div
+        animate={{ width: isSourcesCollapsed ? "50px" : "280px" }}
+        transition={{ duration: 0.25, ease: "easeInOut" }}
+        style={{
+          borderLeft: "1px solid var(--border)",
+          backgroundColor: "var(--sidebar-bg)",
+          display: "flex", flexDirection: "column", zIndex: 5, overflow: "hidden", flexShrink: 0,
+        }}
+      >
+        {/* Sources header */}
+        <div style={{
+          padding: "0.875rem", borderBottom: "1px solid var(--border)",
+          display: "flex", justifyContent: isSourcesCollapsed ? "center" : "space-between",
+          alignItems: "center", flexShrink: 0,
+        }}>
+          {!isSourcesCollapsed && (
+            <span style={{ fontWeight: 600, fontSize: "0.78rem", color: "var(--muted-foreground)", textTransform: "uppercase", letterSpacing: "0.05em", display: "flex", alignItems: "center", gap: "0.4rem" }}>
+              <FileText size={13} /> Sources
+              {latestSources.length > 0 && (
+                <span style={{ background: "var(--primary)", color: "white", borderRadius: "10px", fontSize: "0.65rem", padding: "1px 6px", fontWeight: 700 }}>
+                  {latestSources.length}
+                </span>
+              )}
+            </span>
+          )}
+          <button
+            className="btn btn-ghost"
+            style={{ padding: "0.25rem" }}
+            onClick={() => setIsSourcesCollapsed(!isSourcesCollapsed)}
+            title={isSourcesCollapsed ? "Show sources" : "Hide sources"}
           >
-            <ChevronLeft size={16} />
-          </button>
-          <span style={{ fontSize: '0.75rem', margin: '0 0.25rem', fontFamily: 'monospace' }}>
-            {pageNumber} / {numPages || '-'}
-          </span>
-          <button 
-            className="btn btn-ghost" 
-            style={{ padding: '0.25rem' }} 
-            onClick={() => setPageNumber(p => Math.min(numPages || p, p + 1))}
-            disabled={pageNumber >= (numPages || Infinity)}
-          >
-            <ChevronRight size={16} />
+            {/* Mirror the icon direction for the right panel */}
+            {isSourcesCollapsed ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
           </button>
         </div>
-      </div>
-      
-      <div style={{ boxShadow: 'var(--shadow-lg)', backgroundColor: 'white', minHeight: '800px', minWidth: isExpanded ? '500px' : '700px' }}>
-        <Document
-          file={`/download/${docParam}`}
-          onLoadSuccess={onDocumentLoadSuccess}
-          loading={<div style={{ padding: '4rem', color: 'black', display: 'flex', justifyContent: 'center' }}><Loader2 className="animate-spin" /></div>}
-          error={
-            <div style={{ height: '800px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#666', background: 'white' }}>
-              <FileText size={48} style={{ opacity: 0.2, marginBottom: '1rem' }} />
-              <p>Failed to load document preview.</p>
-            </div>
-          }
-        >
-          <Page pageNumber={pageNumber} width={isExpanded ? 500 : 700} />
-        </Document>
-      </div>
+
+        {!isSourcesCollapsed && (
+          <div className="custom-scrollbar" style={{ flex: 1, overflowY: "auto", padding: "0.75rem", display: "flex", flexDirection: "column", gap: "0.6rem" }}>
+            {latestSources.length === 0 ? (
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", flex: 1, color: "var(--muted-foreground)", textAlign: "center", padding: "2rem 0.5rem" }}>
+                <FileText size={28} style={{ opacity: 0.2, marginBottom: "0.75rem" }} />
+                <p style={{ fontSize: "0.78rem", lineHeight: 1.5 }}>
+                  Sources from the most recent response will appear here.
+                </p>
+              </div>
+            ) : (
+              <>
+                <p style={{ fontSize: "0.68rem", color: "var(--muted-foreground)", marginBottom: "0.25rem" }}>
+                  From latest response
+                </p>
+                {latestSources.map((source, i) => (
+                  <SourceCard key={i} source={source} index={i} />
+                ))}
+              </>
+            )}
+          </div>
+        )}
+      </motion.div>
     </div>
   );
 }

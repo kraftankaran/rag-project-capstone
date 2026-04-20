@@ -31,8 +31,6 @@ app.add_middleware(
 )
 
 
-
-
 class ChatRequest(BaseModel):
     message: str
     conversation_id: Optional[str] = "default_session"
@@ -45,19 +43,16 @@ class SearchRequest(BaseModel):
 
 @app.on_event("startup")
 def startup():
-    
     Database.initialize()
 
 
 @app.on_event("shutdown")
 def shutdown():
-    
     Database.close_all()
 
 
 @app.get("/health")
 def health():
-    storage = AzureStorageService()
     return {"status": "ok"}
 
 
@@ -65,7 +60,7 @@ def health():
 async def upload_pdf(file: UploadFile = File(...)):
     storage = AzureStorageService()
     temp_path = f"/tmp/{file.filename}"
-    doc_id = None  # must be set before try so except can always reference it
+    doc_id = None
 
     with open(temp_path, "wb") as f:
         f.write(await file.read())
@@ -133,9 +128,32 @@ async def upload_pdf(file: UploadFile = File(...)):
 
 @app.get("/pdfs")
 def list_pdfs():
+    """
+    Returns the list of original uploaded PDFs.
+    Only blobs under pdfs/raw/ are returned — page-level files are excluded.
+    Each entry is the full blob path (e.g. 'pdfs/raw/report.pdf').
+    The frontend extracts the basename for display.
+    """
     storage = AzureStorageService()
     try:
-        return storage.list_pdfs()
+        return storage.list_raw_pdfs()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/pages/{doc_name:path}")
+def list_pages(doc_name: str):
+    """
+    Returns the list of individual page blob paths for a given document.
+    doc_name should be the base filename without extension, e.g. 'report'
+    or the full filename 'report.pdf' (extension is stripped automatically).
+    Page blobs live at: pdfs/<doc_name>/<doc_name>_page_N.pdf
+    """
+    storage = AzureStorageService()
+    try:
+        base = doc_name.replace(".pdf", "").replace(".PDF", "")
+        pages = storage.list_pages(base)
+        return {"doc_name": base, "pages": pages}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -190,10 +208,8 @@ def download_pdf(blob_path: str):
 
 @app.post("/search")
 async def search_documents(request: SearchRequest):
-    storage = AzureStorageService()
     try:
         results = hybrid_search(query=request.query, top_k=request.top_k)
-        # Serialize manually — FastAPI cannot auto-serialize dataclasses
         return {
             "results": [
                 {
@@ -203,7 +219,10 @@ async def search_documents(request: SearchRequest):
                     "page_number": r.page_number,
                     "chunk_id": r.chunk_id,
                     "content": r.content,
+                    # Ranking metadata — all three scores exposed
                     "rrf_score": r.rrf_score,
+                    "bm25_rank": r.bm25_rank,
+                    "hnsw_rank": r.hnsw_rank,
                 }
                 for r in results
             ]
@@ -215,7 +234,6 @@ async def search_documents(request: SearchRequest):
 
 @app.post("/chat")
 async def chat_with_docs(request: ChatRequest):
-    storage = AzureStorageService()
     try:
         response = chat(
             user_message=request.message,
@@ -229,6 +247,10 @@ async def chat_with_docs(request: ChatRequest):
                     "file_name": s.file_name,
                     "page_number": s.page_number,
                     "chunk_id": s.chunk_id,
+                    # Ranking metadata for frontend display
+                    "bm25_rank": getattr(s, "bm25_rank", None),
+                    "hnsw_rank": getattr(s, "hnsw_rank", None),
+                    "rrf_score": getattr(s, "rrf_score", None),
                 }
                 for s in response.sources
             ],
@@ -240,6 +262,5 @@ async def chat_with_docs(request: ChatRequest):
 
 @app.delete("/chat/history/{conversation_id}")
 async def reset_chat(conversation_id: str):
-    storage = AzureStorageService()
     clear_history(conversation_id)
     return {"message": f"History for '{conversation_id}' cleared."}
