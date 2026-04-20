@@ -288,7 +288,7 @@ export default function Search() {
           title: r.file_name ? r.file_name.split('/').pop() : `Result ${i+1}`,
           document: r.file_name || "Unknown",
           page: r.page_number || "N/A",
-          chunk: r.chunk_id || "N/A",
+          // chunk: r.chunk_id || "N/A",
           snippet: r.content || "No content available",
           relevance: r.rrf_score || r.score || 0.0
         }));
@@ -458,9 +458,9 @@ export default function Search() {
                         {result.page !== "N/A" && (
                           <span style={{ background: 'var(--card)', border: '1px solid var(--border)', padding: '2px 8px', borderRadius: '4px' }}>Page: {result.page}</span>
                         )}
-                        {result.chunk !== "N/A" && (
+                        {/* {result.chunk !== "N/A" && (
                           <span style={{ background: 'var(--card)', border: '1px solid var(--border)', padding: '2px 8px', borderRadius: '4px' }}>Chunk: {result.chunk}</span>
-                        )}
+                        )} */}
                       </p>
                       {/* MODIFIED: wrap snippet text in HighlightedText */}
                       <p style={{ color: 'var(--foreground)', lineHeight: 1.6, fontSize: '0.95rem' }}>

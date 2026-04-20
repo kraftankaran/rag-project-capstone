@@ -66,7 +66,7 @@ async def upload_pdf(file: UploadFile = File(...)):
     temp_path = f"/tmp/{file.filename}"
     doc_id = None  # must be set before try so except can always reference it
 
-    MAX_FILE_SIZE_MB = 10
+    MAX_FILE_SIZE_MB = 50
     MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
     file_size = 0
 
@@ -327,6 +327,35 @@ async def search_documents(request: SearchRequest):
         # ✅ CONTENT SEARCH (UNCHANGED)
         # =========================
         results = hybrid_search(query=request.query, top_k=request.top_k)
+        # print("🔍 RAW RESULTS")
+        # print("="*40)
+
+        # for r in results:
+        #     print({
+        #         "id": r.id,
+        #         "hnsw_score": r.hnsw_score,
+        #         "bm25_score": r.bm25_score
+        #     })
+        # ✅ FILTER HERE (only affects API response)
+        filtered_results = [
+            r for r in results
+            if (r.hnsw_score is not None and r.hnsw_score > 0.3)
+        ]
+        # print("\n" + "="*40)
+        # print("✅ FILTERED RESULTS (hnsw > 0.3)")
+        # print("="*40)
+
+        # for r in filtered_results:
+        #     print({
+        #         "id": r.id,
+        #         "hnsw_score": r.hnsw_score,
+        #         "bm25_score": r.bm25_score
+        #     })
+        if not filtered_results:
+            return {
+                "results": [],
+                "message": "No results above HNSW threshold"
+            }
 
         return {
             "results": [
@@ -336,12 +365,17 @@ async def search_documents(request: SearchRequest):
                     "file_name": r.file_name,
                     "page_number": r.page_number,
                     "chunk_id": r.chunk_id,
-                    "bm25_rank":r.bm25_rank,
-                    "hnsw_rank":r.hnsw_rank,
+
+                    "bm25_rank": r.bm25_rank,
+                    "hnsw_rank": r.hnsw_rank,
+
+                    "bm25_score": r.bm25_score,
+                    "hnsw_score": r.hnsw_score,
+
                     "content": r.content,
                     "rrf_score": r.rrf_score,
                 }
-                for r in results
+                for r in filtered_results
             ]
         }
 

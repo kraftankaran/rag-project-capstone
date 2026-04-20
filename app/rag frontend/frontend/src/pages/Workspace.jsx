@@ -63,6 +63,7 @@ export default function Workspace() {
 
       if (res.ok) {
         const data = await res.json();
+        // console.log("SOURCES"*70,data)
         // NEW: attach source_references to bot message for display
         setMessages((prev) => [...prev, {
           role: "bot",
