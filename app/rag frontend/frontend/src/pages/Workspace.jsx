@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { Document, Page, pdfjs } from "react-pdf";
 import Markdown from "react-markdown";
-import { Send, Maximize2, Minimize2, ChevronLeft, ChevronRight, Loader2, Search, FileText, Plus, History, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { Send, Maximize2, Minimize2, ChevronLeft, ChevronRight, Loader2, Search, FileText, Plus, History, PanelLeftClose, PanelLeftOpen, Download } from "lucide-react";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 import { motion, AnimatePresence } from "framer-motion";
@@ -31,8 +31,6 @@ export default function Workspace() {
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
-  const [isHistoryCollapsed, setIsHistoryCollapsed] = useState(false);
-  const [activeChatTitle, setActiveChatTitle] = useState("");
   const navigate = useNavigate();
   const endRef = useRef(null);
 
@@ -40,35 +38,7 @@ export default function Workspace() {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
-  const mockHistories = [
-    { id: "chat_1", title: "Data Engineering Q&A", messages: [
-      { role: "user", text: "What is the main architecture of the Data Engineering pipeline?" },
-      { role: "bot", text: "The pipeline consists of ingesting raw data from Azure Blob Storage, processing it using Azure Databricks, and finally storing the refined data in a PostgreSQL database managed by pgvector for semantic search capabilities." },
-      { role: "user", text: "How is it secured?" },
-      { role: "bot", text: "Security is managed through Azure Service Principals, with role-based access control (RBAC) ensuring only authorized microservices can access the storage and database endpoints." }
-    ]},
-    { id: "chat_2", title: "System Architecture", messages: [
-      { role: "user", text: "Can you explain the system architecture?" },
-      { role: "bot", text: "Certainly. The system uses a FastAPI backend integrated with Azure Document Intelligence for OCR. Processed documents are embedded using an LLM and stored in PostgreSQL with pgvector. The frontend is built with React." }
-    ]},
-    { id: "chat_3", title: "Model Deployment Guide", messages: [
-      { role: "user", text: "How do we deploy the models?" },
-      { role: "bot", text: "Models are deployed using Docker containers. The `docker-compose.yml` orchestrates the API, Database, and Frontend containers simultaneously to ensure a consistent deployment environment." }
-    ]}
-  ];
 
-  useEffect(() => {
-    if (chatIdParam) {
-      const history = mockHistories.find(h => h.id === chatIdParam);
-      if (history) {
-        setMessages(history.messages);
-        setActiveChatTitle(history.title);
-      }
-    } else {
-      setMessages([]);
-      setActiveChatTitle("");
-    }
-  }, [chatIdParam]);
 
   const handleAsk = async () => {
     if (!query.trim()) return;
@@ -93,7 +63,12 @@ export default function Workspace() {
 
       if (res.ok) {
         const data = await res.json();
-        setMessages((prev) => [...prev, { role: "bot", text: data.answer || "No response received." }]);
+        // NEW: attach source_references to bot message for display
+        setMessages((prev) => [...prev, {
+          role: "bot",
+          text: data.answer || "No response received.",
+          sources: data.source_references || [],  // NEW
+        }]);
       } else {
         setMessages((prev) => [...prev, { role: "bot", text: "Error: Could not retrieve response from the server." }]);
       }
@@ -115,85 +90,6 @@ export default function Workspace() {
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
       
-      {/* Workspace Left Sidebar: Chat History */}
-      <motion.div 
-        animate={{ width: isHistoryCollapsed ? '50px' : '260px' }}
-        transition={{ duration: 0.3, ease: "easeInOut" }}
-        style={{
-          borderRight: '1px solid var(--border)',
-          backgroundColor: 'var(--sidebar-bg)',
-          display: 'flex',
-          flexDirection: 'column',
-          zIndex: 5
-        }}
-      >
-        <div style={{ padding: '1rem', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: isHistoryCollapsed ? 'center' : 'space-between', alignItems: 'center' }}>
-          {!isHistoryCollapsed && <span style={{ fontWeight: 600, fontSize: '0.875rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}><History size={16} /> Recent Chats</span>}
-          <button 
-            className="btn btn-ghost" 
-            style={{ padding: '0.25rem' }}
-            onClick={() => setIsHistoryCollapsed(!isHistoryCollapsed)}
-            title="Toggle History Sidebar"
-          >
-            {isHistoryCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
-          </button>
-        </div>
-
-        {!isHistoryCollapsed && (
-          <div style={{ padding: '1rem', flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-            <button 
-              className="btn btn-primary" 
-              style={{ width: '100%', marginBottom: '1rem', padding: '0.5rem', display: 'flex', justifyContent: 'center' }}
-              onClick={() => {
-                setMessages([]);
-                setActiveChatTitle("");
-                navigate('/workspace');
-              }}
-            >
-              <Plus size={16} /> New Chat
-            </button>
-
-            <div className="custom-scrollbar" style={{ overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-              {mockHistories.map((chat) => (
-                <button
-                  key={chat.id}
-                  onClick={() => navigate(`/workspace?chat_id=${chat.id}`)}
-                  style={{
-                    display: 'block',
-                    width: '100%',
-                    textAlign: 'left',
-                    padding: '0.75rem',
-                    backgroundColor: chatIdParam === chat.id ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
-                    border: chatIdParam === chat.id ? '1px solid rgba(59, 130, 246, 0.3)' : '1px solid transparent',
-                    color: chatIdParam === chat.id ? 'var(--primary-foreground)' : 'var(--muted-foreground)',
-                    cursor: 'pointer',
-                    borderRadius: 'var(--radius)',
-                    fontSize: '0.875rem',
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    transition: 'all 0.2s ease',
-                  }}
-                  onMouseOver={(e) => {
-                    if (chatIdParam !== chat.id) {
-                      e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.05)';
-                      e.currentTarget.style.color = 'var(--foreground)';
-                    }
-                  }}
-                  onMouseOut={(e) => {
-                    if (chatIdParam !== chat.id) {
-                      e.currentTarget.style.backgroundColor = 'transparent';
-                      e.currentTarget.style.color = 'var(--muted-foreground)';
-                    }
-                  }}
-                >
-                  {chat.title}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-      </motion.div>
 
       {/* Middle side: PDF Viewer */}
       <div style={{ 
@@ -230,15 +126,10 @@ export default function Workspace() {
       </div>
 
       {/* Right side: Chat */}
-      <div style={{ flex: isExpanded ? 1.5 : 1, display: 'flex', flexDirection: 'column', backgroundColor: 'var(--background)', transition: 'flex 0.3s ease' }}>
+      <div style={{ flex: isExpanded ? 3 : 2.5, display: 'flex', flexDirection: 'column', backgroundColor: 'var(--background)', transition: 'flex 0.3s ease' }}>
         <div style={{ padding: '1rem', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <h2 style={{ fontSize: '1.25rem', marginBottom: '0.25rem' }}>AI Workspace</h2>
-            {activeChatTitle ? (
-              <p style={{ color: 'var(--muted-foreground)', fontSize: '0.875rem' }}>Viewing History: {activeChatTitle}</p>
-            ) : (
-              <p style={{ color: 'var(--muted-foreground)', fontSize: '0.875rem' }}>Ask questions about your documents</p>
-            )}
           </div>
         </div>
         
@@ -277,7 +168,38 @@ export default function Workspace() {
                 lineHeight: 1.6
               }}>
                 {m.role === "bot" ? (
-                  <Markdown>{m.text}</Markdown>
+                  <>
+                    <Markdown>{m.text}</Markdown>
+                    {/* NEW: render source references if present */}
+                    {m.sources && m.sources.length > 0 && (
+                      <div style={{ marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border)' }}>
+                        <p style={{ fontSize: '0.75rem', color: 'var(--muted-foreground)', marginBottom: '0.4rem', fontWeight: 600 }}>
+                          Sources
+                        </p>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                          {m.sources.map((src, si) => (
+                            <span
+                              key={si}
+                              style={{
+                                fontSize: '0.7rem',
+                                padding: '0.2rem 0.5rem',
+                                borderRadius: '999px',
+                                backgroundColor: 'rgba(59,130,246,0.12)',
+                                color: 'var(--primary)',
+                                border: '1px solid rgba(59,130,246,0.25)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.25rem',
+                              }}
+                            >
+                              <FileText size={10} />
+                              {src.file_name} · p.{src.page_number}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
                 ) : (
                   m.text
                 )}
@@ -371,10 +293,35 @@ export default function Workspace() {
 function PdfViewer({ docParam, isExpanded }) {
   const [numPages, setNumPages] = useState(null);
   const [pageNumber, setPageNumber] = useState(1);
+  // NEW: track available page blobs for per-page download
+  const [pageBlobs, setPageBlobs] = useState([]);
 
   function onDocumentLoadSuccess({ numPages }) {
     setNumPages(numPages);
   }
+
+  // NEW: fetch available page-wise PDFs when the document changes
+  useEffect(() => {
+    const docBaseName = docParam.split('/').pop();
+    fetch(`/pages/${encodeURIComponent(docBaseName)}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data && data.pages) setPageBlobs(data.pages);
+      })
+      .catch(() => {}); // silently ignore if pages not available
+  }, [docParam]);
+
+  // NEW: download full raw PDF
+  const handleDownloadFull = () => {
+    const docBaseName = docParam.split('/').pop();
+    window.open(`/download-full/${encodeURIComponent(docBaseName)}`, '_blank');
+  };
+
+  // NEW: download current page PDF
+  const handleDownloadPage = () => {
+    const docBaseName = docParam.split('/').pop();
+    window.open(`/download-page/${encodeURIComponent(docBaseName)}?page_number=${pageNumber}`, '_blank');
+  };
 
   return (
     <div style={{ marginBottom: '3rem', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
@@ -389,7 +336,7 @@ function PdfViewer({ docParam, isExpanded }) {
         justifyContent: 'space-between', 
         alignItems: 'center' 
       }}>
-        <div style={{ fontWeight: 600, fontSize: '0.875rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '60%' }}>
+        <div style={{ fontWeight: 600, fontSize: '0.875rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '40%' }}>
           {docParam.split('/').pop()}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'var(--muted)', padding: '0.25rem', borderRadius: 'var(--radius)' }}>
@@ -411,6 +358,25 @@ function PdfViewer({ docParam, isExpanded }) {
             disabled={pageNumber >= (numPages || Infinity)}
           >
             <ChevronRight size={16} />
+          </button>
+        </div>
+        {/* NEW: Download controls */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+          <button
+            className="btn btn-ghost"
+            style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
+            onClick={handleDownloadPage}
+            title={`Download page ${pageNumber}`}
+          >
+            <Download size={13} /> Page
+          </button>
+          <button
+            className="btn btn-secondary"
+            style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
+            onClick={handleDownloadFull}
+            title="Download full PDF"
+          >
+            <Download size={13} /> Full PDF
           </button>
         </div>
       </div>

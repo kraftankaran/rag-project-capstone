@@ -188,6 +188,79 @@ def download_pdf(blob_path: str):
     )
 
 
+# NEW: Download the full raw PDF for a given document filename (basename only, e.g. "report.pdf")
+@app.get("/download-full/{file_name:path}")
+def download_full_pdf(file_name: str):
+    """
+    Download the complete raw PDF from pdfs/raw/<file_name>.
+    Accepts the basename (e.g. 'report.pdf') or the full blob path.
+    """
+    storage = AzureStorageService()
+    # Normalise: if caller passes just a basename, prefix with pdfs/raw/
+    if not file_name.startswith("pdfs/"):
+        blob_path = f"pdfs/raw/{os.path.basename(file_name)}"
+    else:
+        blob_path = file_name
+    try:
+        blob_client = storage.container_client.get_blob_client(blob_path)
+        stream = blob_client.download_blob()
+        props = blob_client.get_blob_properties()
+        return StreamingResponse(
+            stream.chunks(),
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="{blob_path.split("/")[-1]}"',
+                "Content-Length": str(props.size),
+            },
+        )
+    except Exception as exc:
+        logger.error(f"download_full_pdf failed for '{blob_path}': {exc}", exc_info=True)
+        raise HTTPException(status_code=404, detail=f"File not found: {blob_path}")
+
+
+# NEW: Download a single page PDF for a given document.
+# Query params: document_name (raw PDF name) and page_number (1-based int)
+@app.get("/download-page/{document_name:path}")
+def download_page_pdf(document_name: str, page_number: int):
+    """
+    Download a single page PDF from pdfs/<doc_base>_pdf/<doc_base>_page_<N>.pdf
+    """
+    storage = AzureStorageService()
+    base_name = os.path.splitext(os.path.basename(document_name))[0].replace(" ", "_")
+    blob_path = f"pdfs/{base_name}/{base_name}_page_{page_number}.pdf"
+    try:
+        blob_client = storage.container_client.get_blob_client(blob_path)
+        stream = blob_client.download_blob()
+        props = blob_client.get_blob_properties()
+        return StreamingResponse(
+            stream.chunks(),
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="{base_name}_page_{page_number}.pdf"',
+                "Content-Length": str(props.size),
+            },
+        )
+    except Exception as exc:
+        logger.error(f"download_page_pdf failed for '{blob_path}': {exc}", exc_info=True)
+        raise HTTPException(status_code=404, detail=f"Page not found: {blob_path}")
+
+
+# NEW: List all page-wise PDFs available for a document
+@app.get("/pages/{document_name:path}")
+def list_document_pages(document_name: str):
+    """
+    Returns the list of page blob paths for the given document.
+    Used by the frontend to populate per-page download options.
+    """
+    storage = AzureStorageService()
+    try:
+        pages = storage.list_pages_for_document(document_name)
+        return {"document": document_name, "pages": pages}
+    except Exception as exc:
+        logger.error(f"list_document_pages failed: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @app.post("/search")
 async def search_documents(request: SearchRequest):
     storage = AzureStorageService()
@@ -225,6 +298,14 @@ async def chat_with_docs(request: ChatRequest):
             "answer": response.answer,
             "conversation_id": response.conversation_id,
             "sources": response.metadata["chunks"],  # ✅ updated
+            # NEW: simplified source references with just file_name and page_number
+            "source_references": [
+                {
+                    "file_name": chunk["file_name"],
+                    "page_number": chunk["page_number"],
+                }
+                for chunk in response.metadata["chunks"]
+            ],
         }
 
     except Exception as exc:

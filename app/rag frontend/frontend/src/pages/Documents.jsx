@@ -12,6 +12,11 @@ export default function Documents() {
   const [selectedDocs, setSelectedDocs] = useState(new Set());
   const inputRef = useRef(null);
   const navigate = useNavigate();
+  
+  const formatFileName = (path) => {
+  const base = path.split('/').pop(); // remove pdfs/raw/
+  return base.replace(/_/g, ' ');
+};
 
   const fetchDocuments = async () => {
     try {
@@ -90,7 +95,7 @@ export default function Documents() {
   };
 
   const handleDownload = (fileName) => {
-    window.open(`/download/${fileName}`, '_blank');
+    window.open(`/download-full/${fileName}`, '_blank');
   };
 
   return (
@@ -255,7 +260,7 @@ export default function Documents() {
                         <FileText size={20} color="var(--primary)" />
                       </div>
                       <div>
-                        <p style={{ fontWeight: 500 }}>{fileName}</p>
+                        <p style={{ fontWeight: 500 }}>{formatFileName(fileName)}</p>
                         <p style={{ fontSize: '0.75rem', color: 'var(--muted-foreground)', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '4px' }}>
                           <CheckCircle size={12} color="var(--accent)" /> Ready for Processing
                         </p>

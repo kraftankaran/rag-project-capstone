@@ -203,7 +203,7 @@ def run_ocr(file_path: str, document_id: str, doc_id: int, file_type: str):
 
         logger.info(f"Processing batch: pages {[p[1] for p in batch]}")
 
-        with ThreadPoolExecutor(max_workers=3) as executor:
+        with ThreadPoolExecutor(max_workers=5) as executor:
             futures = [executor.submit(process_page, p) for p in batch]
 
             for future in as_completed(futures):

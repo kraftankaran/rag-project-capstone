@@ -1,4 +1,5 @@
 import os
+import re
 from azure.storage.blob import BlobServiceClient
 from azure.identity import DefaultAzureCredential
 
@@ -6,6 +7,12 @@ from app.core.config import settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+# NEW: helper used by list_pages_for_document to sort pages in numeric order
+def _extract_page_number(blob_name: str) -> int:
+    match = re.search(r"_page_(\d+)", blob_name)
+    return int(match.group(1)) if match else 0
 
 
 class AzureStorageService:
@@ -19,13 +26,33 @@ class AzureStorageService:
         )
 
     def list_pdfs(self):
+        # MODIFIED: return only files inside pdfs/raw/ – exclude page-level split folders (*_pdf/)
         blobs = [
             blob.name
-            for blob in self.container_client.list_blobs()
+            for blob in self.container_client.list_blobs(name_starts_with="pdfs/raw/")
             if blob.name.endswith(".pdf")
         ]
-        logger.info(f"Found {len(blobs)} PDFs in Azure")
+        logger.info(f"Found {len(blobs)} raw PDFs in Azure (pdfs/raw/)")
         return blobs
+
+# MODIFIED
+    def list_pages_for_document(self, document_name: str):
+        base_name = os.path.splitext(os.path.basename(document_name))[0].replace(" ", "_")
+
+        # FIX: remove _pdf
+        prefix = f"pdfs/{base_name}/"
+
+        pages = [
+            blob.name
+            for blob in self.container_client.list_blobs(name_starts_with=prefix)
+            if blob.name.endswith(".pdf")
+        ]
+
+        # Sort by page number
+        pages.sort(key=lambda p: _extract_page_number(p))
+
+        logger.info(f"Found {len(pages)} page PDFs for '{document_name}' under '{prefix}'")
+        return pages
 
     def download_file(self, blob_path: str, local_path: str):
         dir_ = os.path.dirname(local_path)
