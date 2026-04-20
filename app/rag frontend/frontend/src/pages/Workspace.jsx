@@ -8,7 +8,10 @@ import "react-pdf/dist/Page/TextLayer.css";
 import { motion, AnimatePresence } from "framer-motion";
 
 // Configure PDF worker
-pdfjs.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
+pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+  'pdfjs-dist/build/pdf.worker.min.mjs',
+  import.meta.url,
+).toString();
 
 export default function Workspace() {
   const [searchParams] = useSearchParams();

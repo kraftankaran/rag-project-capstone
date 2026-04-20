@@ -14,7 +14,7 @@ from app.core.logging import get_logger
 from app.services.storage_service import AzureStorageService
 from app.services.ingestion_azure_service import process_single_pdf
 from app.services.retrieval_service import hybrid_search
-from app.services.chat_service import chat, clear_history
+from app.services.rag_service import rag_chat, clear_history
 from app.services.db_service import create_document, update_status, update_page_count
 
 logger = get_logger(__name__)
@@ -215,28 +215,21 @@ async def search_documents(request: SearchRequest):
 
 @app.post("/chat")
 async def chat_with_docs(request: ChatRequest):
-    storage = AzureStorageService()
     try:
-        response = chat(
+        response = rag_chat(
             user_message=request.message,
             conversation_id=request.conversation_id,
         )
+
         return {
             "answer": response.answer,
             "conversation_id": response.conversation_id,
-            "sources": [
-                {
-                    "file_name": s.file_name,
-                    "page_number": s.page_number,
-                    "chunk_id": s.chunk_id,
-                }
-                for s in response.sources
-            ],
+            "sources": response.metadata["chunks"],  # ✅ updated
         }
+
     except Exception as exc:
         logger.error(f"chat failed: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
-
 
 @app.delete("/chat/history/{conversation_id}")
 async def reset_chat(conversation_id: str):

@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS embeddings (
     -- BM25 column
     content_tsv tsvector,
 
-    -- Vector embedding (MiniLM = 384)
+    -- Vector embedding
     embedding VECTOR(768),
 
     created_at TIMESTAMPTZ DEFAULT NOW(),

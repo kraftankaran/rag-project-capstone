@@ -106,7 +106,7 @@ def run_ocr(file_path: str, document_id: str, doc_id: int, file_type: str):
         credential=DefaultAzureCredential()
     )
 
-    BATCH_SIZE = 3
+    BATCH_SIZE = 5
 
     def process_page(page_tuple):
         try:
