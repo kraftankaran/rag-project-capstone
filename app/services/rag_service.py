@@ -220,6 +220,7 @@ def rag_chat(
     user_message: str,
     conversation_id: str = "default",
     top_k: int = 3,
+    selected_pdf_ids: List[str] = [],    # NEW
 ) -> ChatResponse:
     """
     Two-step history-aware RAG pipeline:
@@ -243,7 +244,11 @@ def rag_chat(
     standalone_query = _llm.rewrite_query(recent_history, user_message)
 
     # ── 3. Retrieve documents using the standalone query ─────
-    chunks = hybrid_search(standalone_query, top_k=top_k)
+    chunks = hybrid_search(
+        standalone_query,
+        top_k=top_k,
+        selected_pdf_ids=selected_pdf_ids,   # NEW
+    )
 
     # ── 4. Build document context ────────────────────────────
     context = ContextBuilder.build(chunks)

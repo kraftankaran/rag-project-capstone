@@ -33,9 +33,12 @@ app.add_middleware(
 
 
 
+from typing import List
+
 class ChatRequest(BaseModel):
     message: str
     conversation_id: Optional[str] = "default_session"
+    selected_pdf_ids: List[str] = []     # file_name basenames, e.g. ["report.pdf"]
 
 
 class SearchRequest(BaseModel):
@@ -292,6 +295,7 @@ async def chat_with_docs(request: ChatRequest):
         response = rag_chat(
             user_message=request.message,
             conversation_id=request.conversation_id,
+            selected_pdf_ids=request.selected_pdf_ids,   # NEW
         )
 
         return {
