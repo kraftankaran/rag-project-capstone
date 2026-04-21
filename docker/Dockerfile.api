@@ -13,10 +13,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 RUN python -m nltk.downloader punkt punkt_tab
 
-# Pre-download both ML models at build time
 RUN python -c "\
 from sentence_transformers import SentenceTransformer, CrossEncoder; \
-SentenceTransformer('all-MiniLM-L6-v2'); \
+SentenceTransformer('intfloat/e5-large-v2'); \
 CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')"
 
 COPY app/ ./app/

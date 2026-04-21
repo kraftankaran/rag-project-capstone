@@ -92,7 +92,7 @@ CREATE TABLE IF NOT EXISTS embeddings (
     content_tsv tsvector,
 
     -- Vector embedding
-    embedding VECTOR(768),
+    embedding VECTOR(1024),
 
     created_at TIMESTAMPTZ DEFAULT NOW(),
 

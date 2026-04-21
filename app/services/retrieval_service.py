@@ -116,7 +116,7 @@ def _hnsw_search(query: str, top_k: int = DEFAULT_TOP_K * 2) -> list[RetrievedCh
     if not query or not query.strip():
         return []
 
-    embedding = generate_embedding(query)
+    embedding = generate_embedding(query, is_query=True)
     if embedding is None:
         logger.warning("HNSW search skipped: could not generate query embedding")
         return []

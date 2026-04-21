@@ -61,7 +61,7 @@ def safe_sent_tokenize(text):
         # fallback (never crash)
         return re.split(r'(?<=[\.])\s+', text)
 
-def _chunk_text(text, size=650):
+def _chunk_text(text, size=1000):
     sentences = safe_sent_tokenize(text)
     chunks = []
     current = []
@@ -229,7 +229,7 @@ def run_ocr(file_path: str, document_id: str, doc_id: int, file_type: str):
                 continue
 
             try:
-                embedding = generate_embedding(chunk)
+                embedding = generate_embedding(chunk,is_query=False)
 
                 if embedding is None:
                     continue
