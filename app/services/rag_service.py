@@ -1,5 +1,6 @@
 # app/services/rag_service.py
 
+import os
 import re
 import textwrap
 from typing import Optional, List
@@ -155,7 +156,6 @@ class ContextBuilder:
 # ── HELPERS ────────────────────────────────────────────────
 
 def _basename(path: str) -> str:
-    import os
     return os.path.basename(path) if path else path
 
 
@@ -200,20 +200,25 @@ def rag_chat(
         standalone_query = user_message
 
     # ── 3. Retrieve documents using the standalone query ─────
-    chunks = hybrid_search(
-        standalone_query,
-        top_k=top_k,
-        selected_pdf_ids=selected_pdf_ids,   # NEW
-    )
+    chunks = hybrid_search(standalone_query, top_k=top_k)
 
     # ✅ FIX 3: fallback if retrieval fails (critical for first query)
     if not chunks:
         chunks = hybrid_search(user_message, top_k=top_k)
 
-    # ── 4. Context ────────────────────
+    # ── 4. Filter chunks to selected documents (post-retrieval, pre-context) ──
+    # If the user selected specific PDFs, discard chunks from other documents
+    # before building the LLM context. Filtering here (rather than in SQL) keeps
+    # the retrieval layer clean and lets ranking/reranking see the full corpus.
+    print("Before"*100,chunks)
+    if selected_pdf_ids:
+        selected_basenames = {os.path.basename(f) for f in selected_pdf_ids}
+        chunks = [c for c in chunks if _basename(c.file_name) in selected_basenames]
+    print("AFTER"*100,chunks)
+    # ── 5. Context ────────────────────
     context = ContextBuilder.build(chunks)
 
-    # ── 5. Semantic history ───────────
+    # ── 6. Semantic history ───────────
     semantic_history = _history.semantic_search(
         conversation_id,
         standalone_query,
@@ -222,7 +227,7 @@ def rag_chat(
 
     history_text = _format_history(semantic_history)
 
-    # ── 6. Prompt ─────────────────────
+    # ── 7. Prompt ─────────────────────
     system_prompt = (
         ANSWER_GENERATION_PROMPT
         + f"\n\nCONVERSATION HISTORY:\n{history_text}"
@@ -245,16 +250,16 @@ def rag_chat(
     print(user_message)
     print("="*80 + "\n")
 
-    # ── 7. LLM ────────────────────────
+    # ── 8. LLM ────────────────────────
     raw_answer = _llm.generate(system_prompt, semantic_history, user_message)
 
     answer = _clean_answer(raw_answer)
 
-    # ── 8. Store history ──────────────
+    # ── 9. Store history ──────────────
     _history.append(conversation_id, ChatMessage("user", user_message))
     _history.append(conversation_id, ChatMessage("assistant", answer))
 
-    # ── 9. Metadata ───────────────────
+    # ── 10. Metadata ───────────────────
     source_files = list({_basename(c.file_name) for c in chunks})
 
     metadata = {

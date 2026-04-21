@@ -50,7 +50,9 @@ export default function Workspace() {
       // Extract file basenames from blob paths to match what the DB stores in file_name.
       // e.g. "pdfs/raw/report.pdf" → "report.pdf"
       // When docs is empty the backend will search across all PDFs (backward-compatible).
-      const selectedFileNames = docs;
+    let selectedFileNames = docs.map(d =>
+      d.split('/').pop().replace(/_/g, ' ')
+    );
 
       const res = await fetch("/chat", {
         method: "POST",
@@ -282,7 +284,7 @@ export default function Workspace() {
             </button>
           </div>
           <p style={{ textAlign: 'center', fontSize: '0.75rem', color: 'var(--muted-foreground)', marginTop: '0.75rem' }}>
-            NeuralRAG can make mistakes. Consider verifying important information.
+            Doc_Explorer can make mistakes. Consider verifying important information.
           </p>
         </div>
       </div>

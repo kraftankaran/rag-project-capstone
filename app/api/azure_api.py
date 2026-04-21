@@ -332,18 +332,18 @@ async def search_documents(request: SearchRequest):
         # ✅ CONTENT SEARCH (UNCHANGED)
         # =========================
         results = hybrid_search(query=request.query, top_k=request.top_k)
-        # Keep all fused results — chunks that only appeared in BM25 have
-        # hnsw_score=None and were previously dropped here even when relevant.
-        # RRF scoring already accounts for each leg's contribution; no extra
-        # score-threshold gate is needed at this layer.
-        filtered_results = results
-
+        print("RESBEFORE"*100,results)
+        # ✅ Apply HNSW score threshold filtering
+        filtered_results = [
+            r for r in results
+            if (r.hnsw_score is None) or (r.hnsw_score > 0.8)
+        ]
         if not filtered_results:
             return {
                 "results": [],
                 "message": "No results found"
             }
-
+        
         return {
             "results": [
                 {

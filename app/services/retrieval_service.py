@@ -28,6 +28,8 @@ class RetrievedChunk:
     page_number: int
     chunk_id: int
     content: str
+    bm25_rank: Optional[float] = None   # NEW
+    hnsw_rank: Optional[float] = None   # NEW
     bm25_score: Optional[float] = None   # NEW
     hnsw_score: Optional[float] = None   # NEW
     rrf_score: float = 0.0
@@ -40,20 +42,13 @@ class RetrievedChunk:
 def _bm25_search(
     query: str,
     top_k: int = DEFAULT_TOP_K * 2,
-    selected_pdf_ids: list[str] = [],
 ) -> list[RetrievedChunk]:
     if not query or not query.strip():
         return []
 
-    filter_clause = ""
-    # Placeholders in SQL: rank_query, where_query, [filter], limit
-    if selected_pdf_ids:
-        filter_clause = "AND file_name = ANY(%s)"
-        params = [query, query, selected_pdf_ids, top_k]
-    else:
-        params = [query, query, top_k]
+    params = [query, query, top_k]
 
-    sql = f"""
+    sql = """
         SELECT
             id,
             document_id::text,
@@ -64,7 +59,6 @@ def _bm25_search(
             ts_rank_cd(content_tsv, websearch_to_tsquery('english', %s)) AS bm25_score
         FROM embeddings
         WHERE content_tsv @@ websearch_to_tsquery('english', %s)
-        {filter_clause}
         ORDER BY bm25_score DESC
         LIMIT %s;
     """
@@ -102,7 +96,6 @@ def _bm25_search(
 def _hnsw_search(
     query: str,
     top_k: int = DEFAULT_TOP_K * 2,
-    selected_pdf_ids: list[str] = [],
 ) -> list[RetrievedChunk]:
     if not query or not query.strip():
         return []
@@ -113,21 +106,14 @@ def _hnsw_search(
 
     vec_str = "[" + ",".join(str(v) for v in embedding) + "]"
 
-    filter_clause = ""
-    # Placeholders in SQL: vec (score), [filter], vec (order), limit
-    if selected_pdf_ids:
-        filter_clause = "AND file_name = ANY(%s)"
-        params = [vec_str, selected_pdf_ids, vec_str, top_k]
-    else:
-        params = [vec_str, vec_str, top_k]
+    params = [vec_str, vec_str, top_k]
 
-    sql = f"""
+    sql = """
         SELECT
             id, document_id::text, file_name, page_number, chunk_id, content,
             1 - (embedding <=> %s::vector) AS cosine_similarity
         FROM embeddings
         WHERE embedding IS NOT NULL
-        {filter_clause}
         ORDER BY embedding <=> %s::vector
         LIMIT %s;
     """
@@ -237,7 +223,6 @@ def hybrid_search(
     top_k: int = DEFAULT_TOP_K,
     bm25_weight: float = DEFAULT_BM25_WEIGHT,
     hnsw_weight: float = DEFAULT_HNSW_WEIGHT,
-    selected_pdf_ids: list[str] = [],
 ) -> list[RetrievedChunk]:
     if not query or not query.strip():
         return []
@@ -246,8 +231,8 @@ def hybrid_search(
     normalized_query = normalize_query(query)
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        bm25_f = executor.submit(_bm25_search, normalized_query, pool, selected_pdf_ids)
-        hnsw_f = executor.submit(_hnsw_search, query, pool, selected_pdf_ids)
+        bm25_f = executor.submit(_bm25_search, normalized_query, pool)
+        hnsw_f = executor.submit(_hnsw_search, query, pool)
         bm25_results = bm25_f.result()
         hnsw_results = hnsw_f.result()
 

@@ -58,7 +58,7 @@ STEP 1 — INFORMATION GATHERING
 - Do NOT ignore partially relevant information.
 
 STEP 2 — SYNTHESIS
-- Combine the gathered information into a single coherent answer.
+- - Combine the gathered information into a single coherent answer. If multiple documents contain relevant information, include and integrate all of them.
 - Resolve references, connect related facts, and ensure completeness.
 - Fill gaps ONLY using logically connected information from the context.
 
