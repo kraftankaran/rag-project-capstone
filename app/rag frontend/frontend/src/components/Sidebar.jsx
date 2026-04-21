@@ -48,7 +48,7 @@ export default function Sidebar() {
             exit={{ opacity: 0 }}
             style={{ fontSize: '1.25rem', fontWeight: 700, margin: 0, background: 'linear-gradient(to right, #fff, #94a3b8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}
           >
-            Neural<span style={{ fontWeight: 400 }}>RAG</span>
+            RAG<span style={{ fontWeight: 400 }}>Doc_Explorer</span>
           </motion.h1>
         )}
 

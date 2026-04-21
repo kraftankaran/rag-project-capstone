@@ -61,7 +61,7 @@ def safe_sent_tokenize(text):
         # fallback (never crash)
         return re.split(r'(?<=[\.])\s+', text)
 
-def _chunk_text(text, size=1000):
+def _chunk_text(text, size=600):
     sentences = safe_sent_tokenize(text)
     chunks = []
     current = []
