@@ -187,6 +187,7 @@ def rag_chat(
     user_message: str,
     conversation_id: str = "default",
     top_k: int = 3,
+    selected_pdf_ids: List[str] = [],    # NEW
 ) -> ChatResponse:
 
     # ── 1. Get recent history ─────────
@@ -198,8 +199,12 @@ def rag_chat(
     else:
         standalone_query = user_message
 
-    # ── 3. Retrieval ──────────────────
-    chunks = hybrid_search(standalone_query, top_k=top_k)
+    # ── 3. Retrieve documents using the standalone query ─────
+    chunks = hybrid_search(
+        standalone_query,
+        top_k=top_k,
+        selected_pdf_ids=selected_pdf_ids,   # NEW
+    )
 
     # ✅ FIX 3: fallback if retrieval fails (critical for first query)
     if not chunks:

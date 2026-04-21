@@ -38,8 +38,6 @@ export default function Workspace() {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
-
-
   const handleAsk = async () => {
     if (!query.trim()) return;
 
@@ -49,16 +47,19 @@ export default function Workspace() {
     setQuery("");
 
     try {
-      // Append instruction to filter by selected docs if there are multiple or specific docs open
-      let payloadMessage = userMsg.text;
-      if (docs.length > 0) {
-        payloadMessage = `[INSTRUCTION: Restrict your knowledge and answers ONLY to the content found in the following documents: ${docs.map(d => d.split('/').pop()).join(', ')}. Do not use other documents.]\n\n${userMsg.text}`;
-      }
+      // Extract file basenames from blob paths to match what the DB stores in file_name.
+      // e.g. "pdfs/raw/report.pdf" → "report.pdf"
+      // When docs is empty the backend will search across all PDFs (backward-compatible).
+      const selectedFileNames = docs;
 
       const res = await fetch("/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: payloadMessage, conversation_id: "default_session" }),
+        body: JSON.stringify({
+          message: userMsg.text,
+          conversation_id: "default_session",
+          selected_pdf_ids: selectedFileNames,   // NEW: drives retrieval-level filtering
+        }),
       });
 
       if (res.ok) {
@@ -68,7 +69,7 @@ export default function Workspace() {
         setMessages((prev) => [...prev, {
           role: "bot",
           text: data.answer || "No response received.",
-          sources: data.source_references || [],  // NEW
+          sources: data.source_references || [],
         }]);
       } else {
         setMessages((prev) => [...prev, { role: "bot", text: "Error: Could not retrieve response from the server." }]);
@@ -90,7 +91,6 @@ export default function Workspace() {
 
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
-      
 
       {/* Middle side: PDF Viewer */}
       <div style={{ 
@@ -171,7 +171,6 @@ export default function Workspace() {
                 {m.role === "bot" ? (
                   <>
                     <Markdown>{m.text}</Markdown>
-                    {/* NEW: render source references if present */}
                     {m.sources && m.sources.length > 0 && (
                       <div style={{ marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border)' }}>
                         <p style={{ fontSize: '0.75rem', color: 'var(--muted-foreground)', marginBottom: '0.4rem', fontWeight: 600 }}>
@@ -294,14 +293,12 @@ export default function Workspace() {
 function PdfViewer({ docParam, isExpanded }) {
   const [numPages, setNumPages] = useState(null);
   const [pageNumber, setPageNumber] = useState(1);
-  // NEW: track available page blobs for per-page download
   const [pageBlobs, setPageBlobs] = useState([]);
 
   function onDocumentLoadSuccess({ numPages }) {
     setNumPages(numPages);
   }
 
-  // NEW: fetch available page-wise PDFs when the document changes
   useEffect(() => {
     const docBaseName = docParam.split('/').pop();
     fetch(`/pages/${encodeURIComponent(docBaseName)}`)
@@ -309,16 +306,14 @@ function PdfViewer({ docParam, isExpanded }) {
       .then(data => {
         if (data && data.pages) setPageBlobs(data.pages);
       })
-      .catch(() => {}); // silently ignore if pages not available
+      .catch(() => {});
   }, [docParam]);
 
-  // NEW: download full raw PDF
   const handleDownloadFull = () => {
     const docBaseName = docParam.split('/').pop();
     window.open(`/download-full/${encodeURIComponent(docBaseName)}`, '_blank');
   };
 
-  // NEW: download current page PDF
   const handleDownloadPage = () => {
     const docBaseName = docParam.split('/').pop();
     window.open(`/download-page/${encodeURIComponent(docBaseName)}?page_number=${pageNumber}`, '_blank');
@@ -361,7 +356,6 @@ function PdfViewer({ docParam, isExpanded }) {
             <ChevronRight size={16} />
           </button>
         </div>
-        {/* NEW: Download controls */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
           <button
             className="btn btn-ghost"
