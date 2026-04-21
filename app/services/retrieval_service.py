@@ -28,11 +28,11 @@ class RetrievedChunk:
     page_number: int
     chunk_id: int
     content: str
-    bm25_rank: Optional[int] = None
-    hnsw_rank: Optional[int] = None
+    bm25_score: Optional[float] = None   # NEW
+    hnsw_score: Optional[float] = None   # NEW
     rrf_score: float = 0.0
-    rerank_score: float = 0.0
-    llm_content: str = ""
+    rerank_score: float = 0.0          # score assigned by CrossEncoder reranker
+    llm_content: str = ""              # expanded context sent to LLM
     metadata: dict = field(default_factory=dict)
 
 # ── BM25 retrieval (PostgreSQL full-text search) ──────────────────────────────
@@ -80,13 +80,22 @@ def _bm25_search(
     finally:
         Database.return_connection(conn)
 
-    return [
+    results = []
+    for row in rows:
+        results.append(
         RetrievedChunk(
-            id=row[0], document_id=row[1], file_name=row[2] or "",
-            page_number=row[3] or 0, chunk_id=row[4] or 0, content=row[5] or "",
+            id=row[0],
+            document_id=row[1],
+            file_name=row[2] or "",
+            page_number=row[3] or 0,
+            chunk_id=row[4] or 0,
+            content=row[5] or "",
+            bm25_score=row[6],   # ✅ ADD THIS
         )
-        for row in rows
-    ]
+    )
+
+    return results
+
 
 # ── HNSW retrieval (pgvector cosine similarity) ───────────────────────────────
 
@@ -134,13 +143,21 @@ def _hnsw_search(
     finally:
         Database.return_connection(conn)
 
-    return [
+    results = []
+    for row in rows:
+        results.append(
         RetrievedChunk(
-            id=row[0], document_id=row[1], file_name=row[2] or "",
-            page_number=row[3] or 0, chunk_id=row[4] or 0, content=row[5] or "",
+            id=row[0],
+            document_id=row[1],
+            file_name=row[2] or "",
+            page_number=row[3] or 0,
+            chunk_id=row[4] or 0,
+            content=row[5] or "",
+            hnsw_score=row[6], 
         )
-        for row in rows
-    ]
+)
+
+    return results
 
 # ── Reciprocal Rank Fusion ────────────────────────────────────────────────────
 
@@ -151,22 +168,41 @@ def _reciprocal_rank_fusion(
     hnsw_weight: float = DEFAULT_HNSW_WEIGHT,
     rrf_k: int = RRF_K,
 ) -> list[RetrievedChunk]:
+
     merged: dict[str, RetrievedChunk] = {}
 
+    # ✅ BM25 loop
     for rank, chunk in enumerate(bm25_results, start=1):
-        chunk.bm25_rank = rank
-        chunk.rrf_score += bm25_weight / (rrf_k + rank)
-        merged[chunk.id] = chunk
-
-    for rank, chunk in enumerate(hnsw_results, start=1):
-        chunk.hnsw_rank = rank
-        rrf_contribution = hnsw_weight / (rrf_k + rank)
-        if chunk.id in merged:
-            merged[chunk.id].hnsw_rank = rank
-            merged[chunk.id].rrf_score += rrf_contribution
-        else:
-            chunk.rrf_score += rrf_contribution
+        if chunk.id not in merged:
             merged[chunk.id] = chunk
+        else:
+            # merge into existing
+            existing = merged[chunk.id]
+            existing.bm25_score = chunk.bm25_score
+
+        merged_chunk = merged[chunk.id]
+
+        merged_chunk.bm25_rank = rank
+        merged_chunk.rrf_score += bm25_weight / (rrf_k + rank)
+
+        # ✅ preserve bm25 score
+        merged_chunk.bm25_score = chunk.bm25_score
+
+    # ✅ HNSW loop
+    for rank, chunk in enumerate(hnsw_results, start=1):
+        if chunk.id not in merged:
+            merged[chunk.id] = chunk
+        else:
+            existing = merged[chunk.id]
+            existing.hnsw_score = chunk.hnsw_score
+
+        merged_chunk = merged[chunk.id]
+
+        merged_chunk.hnsw_rank = rank
+        merged_chunk.rrf_score += hnsw_weight / (rrf_k + rank)
+
+        # ✅ preserve hnsw score
+        merged_chunk.hnsw_score = chunk.hnsw_score
 
     return sorted(merged.values(), key=lambda c: c.rrf_score, reverse=True)
 
