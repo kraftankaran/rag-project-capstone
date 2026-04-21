@@ -12,8 +12,8 @@ from app.services.embedding_service import generate_embedding
 
 
 # ── CONFIG ─────────────────────────────────────────────────
-MAX_CONTEXT_CHARS = 6000
-MAX_HISTORY_TURNS = 6          # max user+assistant pairs kept
+MAX_CONTEXT_CHARS = 10000
+MAX_HISTORY_TURNS = 6
 SEMANTIC_TOP_K = 6
 
 
@@ -21,10 +21,9 @@ SEMANTIC_TOP_K = 6
 
 @dataclass
 class SourceMetadata:
-    """All source metadata in a single unified object."""
     id: str
     document_id: str
-    file_name: str          # basename only, e.g. "policy.pdf"
+    file_name: str
     page_number: int
     chunk_id: int
     bm25_rank: Optional[int]
@@ -35,21 +34,14 @@ class SourceMetadata:
 @dataclass
 class ChatResponse:
     answer: str
-    sources: List[str]             
-    metadata: dict 
+    sources: List[str]
+    metadata: dict
     conversation_id: Optional[str] = None
 
 
-# ── MEMORY (Semantic History) ───────────────────────────────
+# ── MEMORY (FIXED) ─────────────────────────────────────────
 
 class ConversationHistory:
-    """
-    Per-session message store with semantic retrieval.
-
-    Messages are stored alongside their embeddings so that at query time we
-    can surface the most topically-relevant turns rather than just the most
-    recent ones, reducing token usage while preserving useful context.
-    """
 
     def __init__(self):
         self.store: dict[str, list[ChatMessage]] = {}
@@ -62,26 +54,29 @@ class ConversationHistory:
 
         self.store[cid].append(msg)
 
-        emb = generate_embedding(msg.content)
+        # ✅ FIX 1: Use correct embedding type
+        if msg.role == "user":
+            emb = generate_embedding(msg.content, is_query=True)
+        else:
+            emb = generate_embedding(msg.content, is_query=False)
+
         self.embeddings[cid].append(emb)
 
-        # Hard cap: keep last MAX_HISTORY_TURNS * 2 messages (user + assistant)
+        # cap history
         max_msgs = MAX_HISTORY_TURNS * 2
         if len(self.store[cid]) > max_msgs:
             self.store[cid] = self.store[cid][-max_msgs:]
             self.embeddings[cid] = self.embeddings[cid][-max_msgs:]
 
     def get_recent(self, cid: str, n: int = MAX_HISTORY_TURNS) -> List[ChatMessage]:
-        """Return the last *n* message pairs (most recent turns)."""
         msgs = self.store.get(cid, [])
         return msgs[-(n * 2):]
 
     def semantic_search(self, cid: str, query: str, top_k: int = SEMANTIC_TOP_K) -> List[ChatMessage]:
-        """Return the history messages most semantically similar to *query*."""
         if cid not in self.store or not self.store[cid]:
             return []
 
-        query_emb = generate_embedding(query)
+        query_emb = generate_embedding(query, is_query=True)
         if query_emb is None:
             return self.get_recent(cid)
 
@@ -91,10 +86,12 @@ class ConversationHistory:
         for i, emb in enumerate(self.embeddings[cid]):
             if emb is None:
                 continue
+
             emb_vec = np.array(emb)
-            sim = np.dot(query_vec, emb_vec) / (
-                np.linalg.norm(query_vec) * np.linalg.norm(emb_vec) + 1e-10
-            )
+
+            # ✅ FIX 2: embeddings already normalized → dot product only
+            sim = np.dot(query_vec, emb_vec)
+
             scores.append((sim, i))
 
         scores.sort(reverse=True, key=lambda x: x[0])
@@ -105,9 +102,11 @@ class ConversationHistory:
         for _, idx in scores[:top_k]:
             if idx in used:
                 continue
+
             selected.append(self.store[cid][idx])
             used.add(idx)
-            # include neighbour for continuity
+
+            # keep conversational continuity
             if idx + 1 < len(self.store[cid]) and (idx + 1) not in used:
                 selected.append(self.store[cid][idx + 1])
                 used.add(idx + 1)
@@ -119,7 +118,6 @@ class ConversationHistory:
         self.embeddings.pop(cid, None)
 
 
-# singleton — shared across requests
 _history = ConversationHistory()
 
 
@@ -139,6 +137,7 @@ class ContextBuilder:
             file_name = _basename(chunk.file_name)
             header = f"[Source {i}] {file_name} — page {chunk.page_number}"
             body = getattr(chunk, "llm_content", chunk.content)
+
             entry = f"{header}\n{body}\n"
 
             if len(entry) > budget:
@@ -156,21 +155,13 @@ class ContextBuilder:
 # ── HELPERS ────────────────────────────────────────────────
 
 def _basename(path: str) -> str:
-    """Return only the filename from a full or relative path."""
     import os
     return os.path.basename(path) if path else path
 
 
 def _clean_answer(text: str) -> str:
-    """
-    Strip literal \\n escape sequences and collapse excessive whitespace
-    so the answer reads as clean plain text.
-    """
-    # Replace literal \n sequences (not real newlines) with a space
     text = text.replace("\\n", " ")
-    # Collapse runs of real newlines into a single space
     text = re.sub(r"\n+", " ", text)
-    # Collapse multiple spaces
     text = re.sub(r" {2,}", " ", text)
     return text.strip()
 
@@ -185,36 +176,12 @@ def _format_history(history: List[ChatMessage]) -> str:
     return "\n".join(lines)
 
 
-def _chunk_to_source_metadata(chunk: RetrievedChunk) -> SourceMetadata:
-    return SourceMetadata(
-        id=chunk.id,
-        document_id=chunk.document_id,
-        file_name=_basename(chunk.file_name),
-        page_number=chunk.page_number,
-        chunk_id=chunk.chunk_id,
-        bm25_rank=chunk.bm25_rank,
-        hnsw_rank=chunk.hnsw_rank,
-        rrf_score=chunk.rrf_score,
-    )
-
-
 # ── LLM CLIENT ─────────────────────────────────────────────
 
 _llm = HuggingFaceRouterLLMClient()
 
 
 # ── MAIN RAG FUNCTION ──────────────────────────────────────
-def _is_bad_answer(answer: str) -> bool:
-    if not answer:
-        return True
-
-    answer_lower = answer.lower()
-
-    return (
-        "do not contain sufficient information" in answer_lower
-        or "not enough information" in answer_lower
-        or len(answer.strip()) < 20
-    )
 
 def rag_chat(
     user_message: str,
@@ -222,26 +189,15 @@ def rag_chat(
     top_k: int = 3,
     selected_pdf_ids: List[str] = [],    # NEW
 ) -> ChatResponse:
-    """
-    Two-step history-aware RAG pipeline:
 
-    Step 1 — Query Rewriting
-        Uses the conversation history to convert a follow-up question into a
-        fully standalone question.  The rewritten query is used for retrieval
-        so that the vector / BM25 search is not confused by pronouns or
-        implicit references.
-
-    Step 2 — Answer Generation
-        The original user message (not the rewritten query) plus the retrieved
-        context and the semantically-relevant history slice are sent to the LLM
-        for answer generation.
-    """
-
-    # ── 1. Fetch recent history for query rewriting ─────────
+    # ── 1. Get recent history ─────────
     recent_history = _history.get_recent(conversation_id)
 
-    # ── 2. Rewrite follow-up into a standalone query ─────────
-    standalone_query = _llm.rewrite_query(recent_history, user_message)
+    # ── 2. Query rewriting ────────────
+    if recent_history:
+        standalone_query = _llm.rewrite_query(recent_history, user_message)
+    else:
+        standalone_query = user_message
 
     # ── 3. Retrieve documents using the standalone query ─────
     chunks = hybrid_search(
@@ -250,38 +206,56 @@ def rag_chat(
         selected_pdf_ids=selected_pdf_ids,   # NEW
     )
 
-    # ── 4. Build document context ────────────────────────────
+    # ✅ FIX 3: fallback if retrieval fails (critical for first query)
+    if not chunks:
+        chunks = hybrid_search(user_message, top_k=top_k)
+
+    # ── 4. Context ────────────────────
     context = ContextBuilder.build(chunks)
 
-    # ── 5. Semantic history for answer generation ─────────────
+    # ── 5. Semantic history ───────────
     semantic_history = _history.semantic_search(
         conversation_id,
         standalone_query,
         top_k=SEMANTIC_TOP_K,
     )
+
     history_text = _format_history(semantic_history)
 
-    # ── 6. Build system prompt ────────────────────────────────
+    # ── 6. Prompt ─────────────────────
     system_prompt = (
         ANSWER_GENERATION_PROMPT
         + f"\n\nCONVERSATION HISTORY:\n{history_text}"
         + f"\n\nDOCUMENT CONTEXT:\n{context}"
     )
+    print("\n" + "="*80)
+    print("🧠 FINAL SYSTEM PROMPT SENT TO LLM")
+    print("="*80)
+    print(system_prompt)
 
-    # ── 7. Generate answer ────────────────────────────────────
+    print("\n" + "="*80)
+    print("💬 SEMANTIC HISTORY PASSED TO LLM")
+    print("="*80)
+    for msg in semantic_history:
+        print(f"{msg.role.upper()}: {msg.content}")
+
+    print("\n" + "="*80)
+    print("❓ USER MESSAGE")
+    print("="*80)
+    print(user_message)
+    print("="*80 + "\n")
+
+    # ── 7. LLM ────────────────────────
     raw_answer = _llm.generate(system_prompt, semantic_history, user_message)
 
-    # ── 8. Clean formatting ───────────────────────────────────
     answer = _clean_answer(raw_answer)
 
-    # ── 9. Persist conversation ───────────────────────────────
+    # ── 8. Store history ──────────────
     _history.append(conversation_id, ChatMessage("user", user_message))
     _history.append(conversation_id, ChatMessage("assistant", answer))
 
-    # ── 10. Build unified source metadata ─────────────────────
-    source_files = list({
-    _basename(c.file_name) for c in chunks
-})
+    # ── 9. Metadata ───────────────────
+    source_files = list({_basename(c.file_name) for c in chunks})
 
     metadata = {
         "chunks": [
@@ -294,7 +268,7 @@ def rag_chat(
                 "bm25_rank": c.bm25_rank,
                 "hnsw_rank": c.hnsw_rank,
                 "rrf_score": c.rrf_score,
-                "content": c.content 
+                "content": c.content
             }
             for c in chunks
         ]

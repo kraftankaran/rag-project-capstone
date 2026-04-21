@@ -107,7 +107,7 @@ def _hnsw_search(
     if not query or not query.strip():
         return []
 
-    embedding = generate_embedding(query)
+    embedding = generate_embedding(query, is_query=True)
     if embedding is None:
         return []
 
