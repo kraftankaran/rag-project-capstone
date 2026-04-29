@@ -13,10 +13,10 @@ export default function Documents() {
   const inputRef = useRef(null);
   const navigate = useNavigate();
   
-  const formatFileName = (path) => {
-  const base = path.split('/').pop(); // remove pdfs/raw/
-  return base.replace(/_/g, ' ');
-};
+//   const formatFileName = (path) => {
+//   const base = path.split('/').pop(); // remove pdfs/raw/
+//   return base.replace(/_/g, ' ');
+// };
 
   const fetchDocuments = async () => {
     try {
@@ -24,7 +24,7 @@ export default function Documents() {
       const res = await fetch("/pdfs");
       if (res.ok) {
         const data = await res.json();
-        setDocuments(data);
+        setDocuments(data.results || []);
       }
     } catch (e) {
       console.error("Failed to fetch documents", e);
@@ -95,7 +95,8 @@ export default function Documents() {
   };*/
 
   const handleDownload = (fileName) => {
-    window.open(`/download-full/${fileName}`, '_blank');
+    // const cleanName = fileName.replace(/'/g, '');
+    window.open(`/download-full/${encodeURIComponent(fileName)}`, '_blank');
   };
 
   return (
@@ -111,7 +112,9 @@ export default function Documents() {
             className="btn btn-primary" 
             style={{ padding: '0.75rem 1.5rem', boxShadow: 'var(--shadow-lg)', animation: 'pulse-ring 2s infinite' }}
             onClick={() => {
-              const encodedDocs = Array.from(selectedDocs).map(d => encodeURIComponent(d)).join(',');
+              const encodedDocs = Array.from(selectedDocs)
+                .map(d => encodeURIComponent(d.replace))
+                .join(',');
               navigate(`/workspace?docs=${encodedDocs}`);
             }}
           >
@@ -229,7 +232,8 @@ export default function Documents() {
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               {documents.map((doc, i) => {
-                const fileName = typeof doc === "string" ? doc : doc.name;
+                const fileName = typeof doc === "string" ? doc : doc.file_name;
+                const blobPath = typeof doc === "string" ? doc : doc.blob_path;
                 return (
                   <div 
                     key={i} 
@@ -260,7 +264,7 @@ export default function Documents() {
                         <FileText size={20} color="var(--primary)" />
                       </div>
                       <div>
-                        <p style={{ fontWeight: 500 }}>{formatFileName(fileName)}</p>
+                        <p style={{ fontWeight: 500 }}>{fileName}</p>
                         <p style={{ fontSize: '0.75rem', color: 'var(--muted-foreground)', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '4px' }}>
                           <CheckCircle size={12} color="var(--accent)" /> Ready for Processing
                         </p>
@@ -270,7 +274,10 @@ export default function Documents() {
                     <div style={{ display: 'flex', gap: '0.5rem' }}>
                       <button 
                         className="btn btn-primary" 
-                        onClick={() => navigate(`/workspace?doc=${encodeURIComponent(fileName)}`)} 
+                        onClick={() => {
+                          const cleanName = fileName.replace(/'/g, '');
+                          navigate(`/workspace?doc=${encodeURIComponent(blobPath)}`);
+                        }}
                         title="Chat with Document in Workspace"
                         style={{ padding: '0.5rem 1rem' }}
                       >

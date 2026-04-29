@@ -1,9 +1,9 @@
 import os
 
 from app.services.storage_service import AzureStorageService
-from app.services.ocr_service import run_ocr
+from app.services.ocr_service import run_ocr, run_embeddings
 from app.core.logging import get_logger
-
+from app.services.db_service import get_ocr_pages
 logger = get_logger(__name__)
 
 
@@ -23,6 +23,7 @@ def get_documents_azure(download_path: str = "data/azure"):
         logger.info(f"Processing file: {blob}")
 
         docs = run_ocr(file_path, document_id=blob)
+
         all_docs.extend(docs)
 
     logger.info(f"Total pages extracted: {len(all_docs)}")
@@ -33,6 +34,10 @@ def process_single_pdf(file_path: str, file_name: str, doc_id: int, file_type: s
     logger.info(f"Processing uploaded file: {file_name}")
 
     docs = run_ocr(file_path, document_id=file_name, doc_id=doc_id, file_type=file_type)
+    logger.info("Starting embedding pipeline...")
+    run_embeddings(doc_id, file_name, file_type)
+
+    logger.info("Embedding pipeline completed.")
 
     for d in docs:
         print("\n==============================")

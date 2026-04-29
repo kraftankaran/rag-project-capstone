@@ -1,4 +1,7 @@
 import os, re
+from pdf2image import convert_from_path
+from io import BytesIO
+from PIL import Image
 import nltk
 from nltk.tokenize import sent_tokenize
 from pypdf import PdfReader, PdfWriter
@@ -8,7 +11,7 @@ from azure.ai.documentintelligence import DocumentIntelligenceClient
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from app.services.storage_service import AzureStorageService
-from app.services.db_service import insert_page, insert_ocr
+from app.services.db_service import insert_page, insert_ocr, get_ocr_pages
 from app.services.embedding_service import generate_embedding
 from app.services.db_service import insert_embedding
 from app.core.config import settings
@@ -19,7 +22,7 @@ logger = get_logger(__name__)
 
 
 def split_pdf(file_path: str):
-    reader = PdfReader(file_path)
+    reader = PdfReader(file_path, strict=False)
     page_files = []
 
     base_doc_name = os.path.splitext(os.path.basename(file_path))[0]
@@ -95,82 +98,213 @@ def _chunk_text(text, size=600):
             chunks.append(chunk)
     return chunks
 
+def table_to_structured_text(table):
+    rows = {}
 
+    # Build row-wise structure
+    for cell in table.cells:
+        r = cell.row_index
+        c = cell.column_index
+
+        if r not in rows:
+            rows[r] = {}
+
+        rows[r][c] = (cell.content or "").strip()
+
+    if not rows:
+        return []
+
+    ordered_rows = [rows[r] for r in sorted(rows.keys())]
+
+    # -----------------------------
+    # ✅ Detect header row
+    # -----------------------------
+    def is_header(row):
+        values = list(row.values())
+        if not values:
+            return False
+
+        avg_len = sum(len(v) for v in values) / len(values)
+
+        # Heuristic: headers are short
+        return avg_len < 40   # 👈 threshold
+
+    first_row = ordered_rows[0]
+    col_indices = sorted(first_row.keys())
+
+    structured = []
+    structured.append("[TABLE]")
+
+    if is_header(first_row):
+        # ✅ Use detected header
+        columns = []
+        for c in col_indices:
+            val = first_row.get(c, "").strip()
+            columns.append(val if val else f"col_{c}")
+
+        structured.append("columns: " + " | ".join(columns))
+        data_rows = ordered_rows[1:]
+
+    else:
+        # ❌ No header → generate generic column names
+        columns = [f"col_{c}" for c in col_indices]
+        structured.append("columns: " + " | ".join(columns))
+        data_rows = ordered_rows
+
+    # -----------------------------
+    # ✅ Process rows
+    # -----------------------------
+    for row in data_rows:
+        structured.append("row:")
+        for c, col_name in zip(col_indices, columns):
+            value = row.get(c, "").strip()
+            if value:
+                structured.append(f"{col_name}: {value}")
+
+    return structured
 def run_ocr(file_path: str, document_id: str, doc_id: int, file_type: str):
     storage = AzureStorageService()
-    page_files = split_pdf(file_path)
     all_docs = []
 
     client = DocumentIntelligenceClient(
         endpoint=settings.AZURE_DOC_INTEL_ENDPOINT,
         credential=DefaultAzureCredential()
     )
-
-    BATCH_SIZE = 5
+    
+    reader = PdfReader(file_path)
+    page_data = [(page, i + 1) for i, page in enumerate(reader.pages)]
+    BATCH_SIZE = 4
 
     def process_page(page_tuple):
+        pdf_path = None
         try:
-
-            page_path, page_num = page_tuple
-
+            page, page_num = page_tuple
             logger.info(f"OCR on page {page_num}")
 
+            pdf_path = f"/tmp/page_{page_num}.pdf"
+
+            writer = PdfWriter()
+            writer.add_page(page)
+
+            with open(pdf_path, "wb") as f:
+                writer.write(f)
+
             blob_path = storage.upload_page_pdf(
-                local_path=page_path,
+                local_path=pdf_path,
                 document_name=document_id,
                 page_num=page_num,
-                file_type=file_type
+                file_type="pdf"
             )
 
-            logger.info("Opening file...")
-
-            with open(page_path, "rb") as f:
-                logger.info(f"Sending OCR request for page {page_num}...")
+            with open(pdf_path, "rb") as f:
                 poller = client.begin_analyze_document(
-                    "prebuilt-read",
+                    "prebuilt-layout",
                     body=f
                 )
 
-            logger.info(f"Waiting for OCR result for page {page_num}...")
-
             result = poller.result()
-
             logger.info(f"OCR completed for page {page_num}")
 
+            # -----------------------------
+            # DB: store page metadata
+            # -----------------------------
             insert_page(
                 document_id=doc_id,
                 page_number=page_num,
                 page_blob_path=blob_path,
-                local_path=page_path
+                local_path=pdf_path
             )
 
-            docs = []
-            full_text = ""
 
-            try:
-                if not result or not result.pages:
-                    logger.warning(f"No OCR pages returned for page {page_num}")
-                else:
-                    for page in result.pages:
-                        if not page:
-                            continue
+            # items = []
 
-                        lines = getattr(page, "lines", None)
-                        if not lines:
-                            continue
+            # # -----------------------------
+            # # PARAGRAPHS
+            # # -----------------------------
+            # if result.paragraphs:
+            #     for para in result.paragraphs:
+            #         if para.content:
+            #             items.append({
+            #                 "type": "PARAGRAPH",
+            #                 "text": para.content.strip()
+            #             })
 
-                        for line in lines:
-                            if line and getattr(line, "content", None):
-                                full_text += line.content.strip() + ". "
+            # # -----------------------------
+            # # TABLE CELLS
+            # # -----------------------------
+            # if result.tables:
+            #     for t_idx, table in enumerate(result.tables):
+            #         for cell in table.cells:
+            #             if cell.content:
+            #                 items.append({
+            #                     "type": f"TABLE_CELL (r{cell.row_index}, c{cell.column_index})",
+            #                     "text": cell.content.strip()
+            #                 })
 
-            except Exception as e:
-                logger.error(f"Text extraction failed for page {page_num}: {e}")
-                full_text = ""
+            # # -----------------------------
+            # # LINES (raw fallback)
+            # # -----------------------------
+            # if result.pages:
+            #     for page in result.pages:
+            #         for line in page.lines or []:
+            #             if line.content:
+            #                 items.append({
+            #                     "type": "LINE",
+            #                     "text": line.content.strip()
+            #                 })
 
+            # # -----------------------------
+            # # SINGLE LOOP OUTPUT
+            # # -----------------------------
+            # logger.info("------ UNIFIED CONTENT ------")
+
+            # for item in items:
+            #     logger.info(f"[{item['type']}] -> {item['text']}")
+
+            extracted_parts = []
+
+            # -----------------------------
+            # ✅ CASE 1: TABLE EXISTS
+            # -----------------------------
+            if result.tables:
+
+                # 1. Extract heading (first paragraph only)
+                if result.paragraphs:
+                    first_para = result.paragraphs[0].content.strip()
+                    if first_para:
+                        extracted_parts.append(f"[HEADING] {first_para}")
+
+                # 2. Extract tables (main structured content)
+                for table in result.tables:
+                    extracted_parts.extend(table_to_structured_text(table))
+
+
+            # -----------------------------
+            # ✅ CASE 2: NO TABLE → USE PARAGRAPHS
+            # -----------------------------
+            elif result.paragraphs:
+                for para in result.paragraphs:
+                    if para.content:
+                        extracted_parts.append(para.content.strip())
+
+
+            # -----------------------------
+            # ✅ CASE 3: FALLBACK → LINES
+            # -----------------------------
+            elif result.pages:
+                for page in result.pages:
+                    for line in page.lines or []:
+                        if line.content:
+                            extracted_parts.append(line.content.strip())
+
+            full_text = " ".join(extracted_parts)
+
+            # Optional: keep your cleaning (light)
             text = clean_text(full_text) if full_text else ""
 
             if not text:
                 logger.warning(f"Empty OCR text for page {page_num}")
+
             tags = ["general"]
 
             insert_ocr(
@@ -180,8 +314,7 @@ def run_ocr(file_path: str, document_id: str, doc_id: int, file_type: str):
                 tags=tags
             )
 
-            
-            docs.append(
+            docs = [
                 Document(
                     page_content=text,
                     metadata={
@@ -191,35 +324,71 @@ def run_ocr(file_path: str, document_id: str, doc_id: int, file_type: str):
                         "tags": tags
                     }
                 )
-            )
+            ]
 
             return docs
-        finally:
-            if os.path.exists(page_path):
-                os.remove(page_path)
 
-    for i in range(0, len(page_files), BATCH_SIZE):
-        batch = page_files[i:i + BATCH_SIZE]
+        finally:
+            if pdf_path and os.path.exists(pdf_path):
+                os.remove(pdf_path)
+
+    # -----------------------------
+    # ✅ Parallel processing
+    # -----------------------------
+
+    for i in range(0, len(page_data), BATCH_SIZE):
+        batch = page_data[i:i + BATCH_SIZE]
 
         logger.info(f"Processing batch: pages {[p[1] for p in batch]}")
 
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        with ThreadPoolExecutor(max_workers=4) as executor:
             futures = [executor.submit(process_page, p) for p in batch]
 
             for future in as_completed(futures):
                 try:
-                    result_docs = future.result()
-                    all_docs.extend(result_docs)
+                    docs = future.result()
+                    all_docs.extend(docs)
                 except Exception as e:
                     logger.error(f"Error processing page: {e}")
 
-    logger.info("Starting embedding generation...")
+    return all_docs
 
-    for doc in all_docs:
-        text = doc.page_content
-        page_num = doc.metadata["page"]
+def process_batch(chunks, meta, doc_id, document_id, file_type):
+    try:
+        embeddings = generate_embedding(chunks, is_query=False)  # ⚠️ must support list input
 
-        if not text or not text.strip():
+        for emb, (page_num, chunk_id), chunk in zip(embeddings, meta, chunks):
+            insert_embedding(
+                id=f"{doc_id}_p{page_num}_c{chunk_id}",
+                document_id=doc_id,
+                file_name=document_id,
+                file_type=file_type,
+                page_number=page_num,
+                chunk_id=chunk_id,
+                content=chunk,
+                embedding=emb
+            )
+
+    except Exception as e:
+        logger.error(f"Batch embedding failed: {e}")
+
+def run_embeddings(doc_id: int, document_id: str, file_type: str):
+    logger.info("Starting batched embedding generation...")
+
+    logger.info(f"Fetching OCR pages for doc_id={doc_id}")
+    pages = get_ocr_pages(doc_id)
+    logger.info(f"Pages fetched: {len(pages)}")
+
+    BATCH_SIZE = 20  # 🔥 important
+
+    batch_chunks = []
+    batch_meta = []
+
+    for page in pages:
+        text = page["content"]
+        page_num = page["page_number"]
+
+        if not text.strip():
             continue
 
         chunks = _chunk_text(text)
@@ -228,24 +397,15 @@ def run_ocr(file_path: str, document_id: str, doc_id: int, file_type: str):
             if not chunk.strip():
                 continue
 
-            try:
-                embedding = generate_embedding(chunk,is_query=False)
+            batch_chunks.append(chunk)
+            batch_meta.append((page_num, i))
 
-                if embedding is None:
-                    continue
+            # 🚀 When batch is full → process
+            if len(batch_chunks) == BATCH_SIZE:
+                process_batch(batch_chunks, batch_meta, doc_id, document_id, file_type)
+                batch_chunks = []
+                batch_meta = []
 
-                insert_embedding(
-                    id=f"{doc_id}_p{page_num}_c{i}",
-                    document_id=doc_id,
-                    file_name=document_id,
-                    file_type=file_type,
-                    page_number=page_num,
-                    chunk_id=i,
-                    content=chunk,
-                    embedding=embedding
-                )
-
-            except Exception as e:
-                logger.error(f"Embedding failed for page {page_num}, chunk {i}: {e}")
-
-    return all_docs
+    # 🚀 process remaining
+    if batch_chunks:
+        process_batch(batch_chunks, batch_meta, doc_id, document_id, file_type)

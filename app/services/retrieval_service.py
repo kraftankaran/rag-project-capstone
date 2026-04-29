@@ -87,7 +87,9 @@ def _bm25_search(
             bm25_score=row[6],   # ✅ ADD THIS
         )
     )
-
+    logger.info("------ BM25 RESULTS ------")
+    for i, r in enumerate(results):
+        logger.info(f"[BM25 {i}] score={r.bm25_score} -> {r.content}")
     return results
 
 
@@ -142,7 +144,8 @@ def _hnsw_search(
             hnsw_score=row[6], 
         )
 )
-
+    for i, r in enumerate(results):
+        logger.info(f"[HNSW {i}] score={r.hnsw_score} -> {r.content}")
     return results
 
 # ── Reciprocal Rank Fusion ────────────────────────────────────────────────────
@@ -189,7 +192,13 @@ def _reciprocal_rank_fusion(
 
         # ✅ preserve hnsw score
         merged_chunk.hnsw_score = chunk.hnsw_score
-
+    logger.info("------ RRF FUSED RESULTS ------")
+    for i, r in enumerate(sorted(merged.values(), key=lambda c: c.rrf_score, reverse=True)):
+        logger.info(
+            f"[RRF {i}] score={r.rrf_score:.4f} | "
+            f"bm25_rank={r.bm25_rank} hnsw_rank={r.hnsw_rank} | "
+            f"text={r.content}"
+        )
     return sorted(merged.values(), key=lambda c: c.rrf_score, reverse=True)
 
 def normalize_query(q: str):
@@ -238,22 +247,36 @@ def hybrid_search(
 
     fused = _reciprocal_rank_fusion(bm25_results, hnsw_results, bm25_weight, hnsw_weight)
     reranked = rerank(query, fused[:top_k * 3])
-
+    logger.info("------ RERANKED RESULTS ------")
+    for i, r in enumerate(reranked):
+        logger.info(f"[RERANK {i}] score={r.rerank_score} -> {r.content[:150]}")
     final_expanded = []
     top_chunks = reranked[:top_k]
-    support_chunks = reranked[top_k : top_k * 2]
+    def get_support_chunks_for_chunk(chunk, candidates, max_support=2):
+        # sort by similarity to current chunk (use rerank_score or embedding similarity)
+        related = sorted(
+            [c for c in candidates if c.id != chunk.id],
+            key=lambda x: x.rerank_score,
+            reverse=True
+        )
+        return related[:max_support]
+
+    candidates = reranked[top_k:]   # remaining chunks
 
     for chunk in top_chunks:
         neighbors = _get_adjacent_chunks(chunk)
+
+        support_chunks = get_support_chunks_for_chunk(chunk, candidates)
+
         prev_text = " ".join(c.content for c in neighbors if c.chunk_id < chunk.chunk_id)
         next_text = " ".join(c.content for c in neighbors if c.chunk_id > chunk.chunk_id)
-        support_text = " ".join(c.content for c in support_chunks if c.id != chunk.id)
+        support_text = " ".join(c.content for c in support_chunks)
 
         sections = [f"Main content:\n{chunk.content}"]
         if prev_text.strip(): sections.append(f"Context before:\n{prev_text}")
         if next_text.strip(): sections.append(f"Context after:\n{next_text}")
         if support_text.strip(): sections.append(f"Supporting context:\n{support_text}")
-        
+
         chunk.llm_content = "\n\n".join(sections)
         final_expanded.append(chunk)
 
