@@ -37,7 +37,7 @@ class AzureStorageService:
 
 # MODIFIED
     def list_pages_for_document(self, document_name: str):
-        base_name = os.path.splitext(os.path.basename(document_name))[0].replace(" ", "_")
+        base_name = os.path.splitext(os.path.basename(document_name))[0]
 
         # FIX: remove _pdf
         prefix = f"pdfs/{base_name}/"
@@ -66,7 +66,7 @@ class AzureStorageService:
 
     def upload_file(self, local_path: str, file_type: str, blob_path: str = None):
         if not blob_path:
-            file_name = os.path.basename(local_path).replace(" ", "_")
+            file_name = os.path.basename(local_path)
             blob_path = f"{file_type}s/raw/{file_name}"
         blob = self.container_client.get_blob_client(blob_path)
         with open(local_path, "rb") as data:
@@ -75,7 +75,7 @@ class AzureStorageService:
         return blob_path
 
     def upload_page_pdf(self, local_path: str, document_name: str, page_num: int, file_type: str):
-        base_name = os.path.splitext(os.path.basename(document_name))[0].replace(" ", "_")
+        base_name = os.path.splitext(os.path.basename(document_name))[0]
         blob_path = f"{file_type}s/{base_name}/{base_name}_page_{page_num}.pdf"
         blob = self.container_client.get_blob_client(blob_path)
         with open(local_path, "rb") as data:

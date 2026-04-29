@@ -210,11 +210,9 @@ def rag_chat(
     # If the user selected specific PDFs, discard chunks from other documents
     # before building the LLM context. Filtering here (rather than in SQL) keeps
     # the retrieval layer clean and lets ranking/reranking see the full corpus.
-    print("Before"*100,chunks)
     if selected_pdf_ids:
         selected_basenames = {os.path.basename(f) for f in selected_pdf_ids}
         chunks = [c for c in chunks if _basename(c.file_name) in selected_basenames]
-    print("AFTER"*100,chunks)
     # ── 5. Context ────────────────────
     context = ContextBuilder.build(chunks)
 
