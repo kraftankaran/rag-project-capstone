@@ -296,14 +296,13 @@ function PdfViewer({ docParam, isExpanded }) {
   const [numPages, setNumPages] = useState(null);
   const [pageNumber, setPageNumber] = useState(1);
   const [pageBlobs, setPageBlobs] = useState([]);
-
+  const fileName = docParam.split('/').pop(); // only for display
   function onDocumentLoadSuccess({ numPages }) {
     setNumPages(numPages);
   }
 
   useEffect(() => {
-    const docBaseName = docParam.split('/').pop();
-    fetch(`/pages/${encodeURIComponent(docBaseName)}`)
+      fetch(`/pages/${encodeURIComponent(fileName)}`)
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (data && data.pages) setPageBlobs(data.pages);
@@ -312,13 +311,11 @@ function PdfViewer({ docParam, isExpanded }) {
   }, [docParam]);
 
   const handleDownloadFull = () => {
-    const docBaseName = docParam.split('/').pop();
-    window.open(`/download-full/${encodeURIComponent(docBaseName)}`, '_blank');
+    window.open(`/download-full/${encodeURIComponent(docParam)}`, '_blank');
   };
 
   const handleDownloadPage = () => {
-    const docBaseName = docParam.split('/').pop();
-    window.open(`/download-page/${encodeURIComponent(docBaseName)}?page_number=${pageNumber}`, '_blank');
+    window.open(`/download-page/${encodeURIComponent(docParam)}?page_number=${pageNumber}`, '_blank');
   };
 
   return (
@@ -380,7 +377,7 @@ function PdfViewer({ docParam, isExpanded }) {
       
       <div style={{ boxShadow: 'var(--shadow-lg)', backgroundColor: 'white', minHeight: '800px', minWidth: isExpanded ? '500px' : '700px' }}>
         <Document
-          file={`/download/${docParam}`}
+        file={`/download/${encodeURIComponent(docParam)}`}
           onLoadSuccess={onDocumentLoadSuccess}
           loading={<div style={{ padding: '4rem', color: 'black', display: 'flex', justifyContent: 'center' }}><Loader2 className="animate-spin" /></div>}
           error={

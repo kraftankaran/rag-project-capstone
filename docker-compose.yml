@@ -1,23 +1,5 @@
 services:
 
-  db:
-    image: ankane/pgvector
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: ${POSTGRES_DB:-doc_explorer}
-    ports:
-      - "5434:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    restart: always
-
   api:
     build:
       context: .
@@ -27,14 +9,7 @@ services:
     volumes:
       - ./app:/app/app:cached
     env_file:
-      - .env
-    environment:
-      # Override DATABASE_URL so the host is always the db service name,
-      # regardless of what is written in .env
-      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-doc_explorer}
-    depends_on:
-      db:
-        condition: service_healthy
+      - .env   # ✅ Neon connection string will be used
     restart: on-failure
 
   frontend:
@@ -46,6 +21,3 @@ services:
     depends_on:
       - api
     restart: on-failure
-
-volumes:
-  postgres_data:

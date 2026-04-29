@@ -7,6 +7,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
 from pypdf import PdfReader
+from app.db.init_db import run_db_init
 
 from app.db.db import Database
 from app.core.config import settings
@@ -15,7 +16,7 @@ from app.services.storage_service import AzureStorageService
 from app.services.ingestion_azure_service import process_single_pdf
 from app.services.retrieval_service import hybrid_search
 from app.services.rag_service import rag_chat, clear_history
-from app.services.db_service import create_document, update_status, update_page_count
+from app.services.db_service import create_document, update_status, update_page_count, get_all_documents, search_documents_by_title
 
 logger = get_logger(__name__)
 
@@ -49,8 +50,8 @@ class SearchRequest(BaseModel):
 
 @app.on_event("startup")
 def startup():
-    
     Database.initialize()
+    run_db_init()
 
 
 @app.on_event("shutdown")
@@ -110,9 +111,9 @@ async def upload_pdf(file: UploadFile = File(...)):
             )
 
         blob_name = storage.upload_file(temp_path, file_type=file_type)
-
+        clean_name = file.filename
         doc_id, already_exists = create_document(
-            file_name=file.filename,
+            file_name=clean_name,
             blob_path=blob_name,
             container=settings.AZURE_STORAGE_CONTAINER,
             file_type=file_type,
@@ -158,9 +159,12 @@ async def upload_pdf(file: UploadFile = File(...)):
 
 @app.get("/pdfs")
 def list_pdfs():
-    storage = AzureStorageService()
     try:
-        return storage.list_pdfs()
+        docs = get_all_documents()
+
+        return {
+            "results": docs
+        }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -200,6 +204,14 @@ def process_pdf(file_name: str):
 @app.get("/download/{blob_path:path}")
 def download_pdf(blob_path: str):
     storage = AzureStorageService()
+    logger.info(f"RAW incoming path: {blob_path}    "*20)
+    # blobs = storage.container_client.list_blobs(name_starts_with="pdfs/raw/")
+    # for b in blobs:
+    #     print("BLOBS"*2,repr(b.name))
+    blob_client = storage.container_client.get_blob_client(blob_path)
+
+    logger.info(f"FINAL blob path used: {blob_path}"     *20)
+    print("BLOB"*100, blob_path)
     blob_client = storage.container_client.get_blob_client(blob_path)
     stream = blob_client.download_blob()
     props = blob_client.get_blob_properties()
@@ -247,27 +259,34 @@ def download_full_pdf(file_name: str):
 # Query params: document_name (raw PDF name) and page_number (1-based int)
 @app.get("/download-page/{document_name:path}")
 def download_page_pdf(document_name: str, page_number: int):
-    """
-    Download a single page PDF from pdfs/<doc_base>_pdf/<doc_base>_page_<N>.pdf
-    """
     storage = AzureStorageService()
-    base_name = os.path.splitext(os.path.basename(document_name))[0].replace(" ", "_")
-    blob_path = f"pdfs/{base_name}/{base_name}_page_{page_number}.pdf"
-    try:
-        blob_client = storage.container_client.get_blob_client(blob_path)
-        stream = blob_client.download_blob()
-        props = blob_client.get_blob_properties()
-        return StreamingResponse(
-            stream.chunks(),
-            media_type="application/pdf",
-            headers={
-                "Content-Disposition": f'attachment; filename="{base_name}_page_{page_number}.pdf"',
-                "Content-Length": str(props.size),
-            },
-        )
-    except Exception as exc:
-        logger.error(f"download_page_pdf failed for '{blob_path}': {exc}", exc_info=True)
-        raise HTTPException(status_code=404, detail=f"Page not found: {blob_path}")
+
+    base_name = os.path.splitext(os.path.basename(document_name))[0]
+    prefix = f"pdfs/{base_name}/"
+
+    blobs = storage.container_client.list_blobs(name_starts_with=prefix)
+
+    target_blob = None
+    for b in blobs:
+        if f"_page_{page_number}.pdf" in b.name:
+            target_blob = b.name
+            break
+
+    if not target_blob:
+        raise HTTPException(status_code=404, detail="Page not found")
+
+    blob_client = storage.container_client.get_blob_client(target_blob)
+    stream = blob_client.download_blob()
+    props = blob_client.get_blob_properties()
+
+    return StreamingResponse(
+        stream.chunks(),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{target_blob.split("/")[-1]}"',
+            "Content-Length": str(props.size),
+        },
+    )
 
 
 # NEW: List all page-wise PDFs available for a document
@@ -295,44 +314,19 @@ async def search_documents(request: SearchRequest):
         # ✅ TITLE SEARCH (RAW PDFs ONLY)
         # =========================
         if request.search_type == "title":
-            blobs = storage.container_client.list_blobs(name_starts_with="pdfs/")
-
-            raw_pdfs = []
-
-            for blob in blobs:
-                path = blob.name
-
-                # ✅ ONLY raw PDFs
-                if path.startswith("pdfs/raw/") and path.endswith(".pdf"):
-                    raw_pdfs.append(path)
-
-            query_lower = request.query.lower()
-
-            # ✅ match on filename only
-            filtered = [
-                pdf for pdf in raw_pdfs
-                if query_lower in pdf.split("/")[-1].lower()
-            ]
+            results = search_documents_by_title(
+                query=request.query,
+                top_k=request.top_k
+            )
 
             return {
-                "results": [
-                    {
-                        "id": i,
-                        "file_name": pdf.split("/")[-1],  # clean name
-                        "page_number": None,
-                        "chunk_id": None,
-                        "content": f"Document: {pdf.split('/')[-1]}",
-                        "rrf_score": 1.0
-                    }
-                    for i, pdf in enumerate(filtered[: request.top_k])
-                ]
+                "results": results
             }
 
         # =========================
         # ✅ CONTENT SEARCH (UNCHANGED)
         # =========================
         results = hybrid_search(query=request.query, top_k=request.top_k)
-        print("RESBEFORE"*100,results)
         # ✅ Apply HNSW score threshold filtering
         filtered_results = [
             r for r in results
