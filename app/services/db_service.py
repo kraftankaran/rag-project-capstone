@@ -1,5 +1,59 @@
 from app.db.db import Database
 
+def search_documents_by_title(query: str, top_k: int = 5):
+    conn = Database.get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT document_id, file_name, page_count
+                FROM documents
+                WHERE status = 'completed'
+                  AND LOWER(file_name) LIKE %s
+                ORDER BY created_at DESC
+                LIMIT %s
+            """, (f"%{query.lower()}%", top_k))
+
+            rows = cur.fetchall()
+
+            return [
+                {
+                    "document_id": str(r[0]),
+                    "file_name": r[1],
+                    "page_number": None,
+                    "chunk_id": None,
+                    "content": f"Document: {r[1]}",
+                    "rrf_score": 1.0
+                }
+                for r in rows
+            ]
+    finally:
+        Database.return_connection(conn)
+        
+def get_all_documents():
+    conn = Database.get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT document_id, file_name, blob_path, status, page_count
+                FROM documents
+                WHERE status = 'completed'
+                ORDER BY created_at DESC
+            """)
+
+            rows = cur.fetchall()
+
+            return [
+                {
+                    "document_id": str(r[0]),
+                    "file_name": r[1],
+                    "blob_path": r[2],
+                    "status": r[3],
+                    "page_count": r[4],
+                }
+                for r in rows
+            ]
+    finally:
+        Database.return_connection(conn)
 
 def create_document(file_name, blob_path, container, file_type):
     conn = Database.get_connection()
@@ -160,5 +214,28 @@ def insert_embedding(
                         embedding
                     )
                 )
+    finally:
+        Database.return_connection(conn)
+
+def get_ocr_pages(document_id: int):
+    conn = Database.get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT page_number, content
+                FROM ocr_results
+                WHERE document_id = %s
+                ORDER BY page_number
+            """, (document_id,))
+            
+            rows = cur.fetchall()
+
+            return [
+                {
+                    "page_number": r[0],
+                    "content": r[1]
+                }
+                for r in rows
+            ]
     finally:
         Database.return_connection(conn)
